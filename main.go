@@ -21,6 +21,8 @@ import (
 
 	"github.com/edgexfoundry/app-functions-sdk-go/v4/pkg"
 	"github.com/edgexfoundry/app-functions-sdk-go/v4/pkg/interfaces"
+
+	"github.com/edgexfoundry/app-service-configurable/internal/sparkplug"
 )
 
 const (
@@ -45,15 +47,43 @@ func main() {
 
 	lc.Debugf("Found %d configured pipeline(s)", len(configuredPipelines))
 
+	var sparkplugConfig sparkplug.ServiceConfig
+	if err = service.LoadCustomConfig(&sparkplugConfig, "SparkplugConfig"); err != nil {
+		lc.Errorf("failed to load SparkplugConfig: %s", err.Error())
+		os.Exit(-1)
+	}
+
+	var sparkplugFn interfaces.AppFunction
+	if sparkplugConfig.SparkplugConfig.Enabled {
+		node, err := sparkplug.NewNode(sparkplugConfig.SparkplugConfig, service.SecretProvider(), lc)
+		if err != nil {
+			lc.Errorf("failed to create Sparkplug node: %s", err.Error())
+			os.Exit(-1)
+		}
+		if err = node.Start(service.AppContext()); err != nil {
+			lc.Errorf("failed to start Sparkplug node: %s", err.Error())
+			os.Exit(-1)
+		}
+
+		sparkplugFn = sparkplug.NewExportFunction(node)
+		lc.Infof("Sparkplug B export enabled for group '%s' edge node '%s'",
+			sparkplugConfig.SparkplugConfig.GroupId, sparkplugConfig.SparkplugConfig.EdgeNodeId)
+	}
+
 	for _, pipeline := range configuredPipelines {
+		transforms := pipeline.Transforms
+		if sparkplugFn != nil {
+			transforms = append(transforms, sparkplugFn)
+		}
+
 		switch pipeline.Id {
 		case interfaces.DefaultPipelineId:
-			if err = service.SetDefaultFunctionsPipeline(pipeline.Transforms...); err != nil {
-				lc.Errorf("Unable to Set Default Functions Pipeline: %s", pipeline.Id, err.Error())
+			if err = service.SetDefaultFunctionsPipeline(transforms...); err != nil {
+				lc.Errorf("Unable to Set Default Functions Pipeline: %s", err.Error())
 				os.Exit(-1)
 			}
 		default:
-			if err = service.AddFunctionsPipelineForTopics(pipeline.Id, pipeline.Topics, pipeline.Transforms...); err != nil {
+			if err = service.AddFunctionsPipelineForTopics(pipeline.Id, pipeline.Topics, transforms...); err != nil {
 				lc.Errorf("Unable to Add Functions Pipeline for pipeline id '%s': %s", pipeline.Id, err.Error())
 				os.Exit(-1)
 			}

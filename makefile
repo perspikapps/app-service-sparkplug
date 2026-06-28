@@ -1,4 +1,4 @@
-.PHONY: build tidy docker test clean vendor
+.PHONY: build tidy docker test clean vendor protobuf
 
 # change the following boolean flag to enable or disable the Full RELRO (RELocation Read Only) for linux ELF (Executable and Linkable Format) binaries
 ENABLE_FULL_RELRO=true
@@ -84,3 +84,9 @@ clean:
 
 vendor:
 	go mod vendor
+
+# Regenerates the Sparkplug B protobuf bindings from the vendored sparkplug_b.proto.
+# Requires protoc (protobuf-compiler) and protoc-gen-go on PATH:
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+protobuf:
+	protoc --go_out=. --go_opt=paths=source_relative internal/sparkplug/spplugb/sparkplug_b.proto

@@ -1,0 +1,60 @@
+Writable:
+  LogLevel: "INFO"
+  StoreAndForward:
+    Enabled: false
+
+  Pipeline:
+    ExecutionOrder: "FilterByProfileName, FilterByDeviceName, FilterBySourceName, FilterByResourceName"
+
+    Functions:
+      FilterByProfileName:
+        Parameters:
+          ProfileNames: ""
+          FilterOut: "false"
+      FilterByDeviceName:
+        Parameters:
+          DeviceNames: ""
+          FilterOut: "false"
+      FilterBySourceName:
+        Parameters:
+          SourceNames: ""
+          FilterOut: "false"
+      FilterByResourceName:
+        Parameters:
+          ResourceNames: ""
+          FilterOut: "false"
+
+# Sparkplug B export is implemented in Go (not YAML) and is appended to the pipeline above by
+# main.go when Enabled is true. One running service instance is one Sparkplug Edge Node; each
+# distinct EdgeX device name seen on the pipeline becomes its own Sparkplug Device.
+SparkplugConfig:
+  Enabled: true
+  GroupId: "EdgeX"
+  EdgeNodeId: "app-sparkplug-export"
+  BrokerAddress: "tcp://localhost:1883"
+  ClientId: "app-sparkplug-export"
+  SecretName: "mqtt"
+  AuthMode: "none"
+  QoS: 0
+  SkipCertVerify: false
+
+InsecureSecrets:
+  mqtt:
+    SecretName: "mqtt"
+    SecretData:
+      username: ""
+      password: ""
+      cacert: ""
+      clientcert: ""
+      clientkey: ""
+
+Service:
+  Host: "localhost"
+  Port: 59708
+  StartupMsg: "app-sparkplug-export has Started"
+
+MessageBus:
+  Optional:
+    ClientId: "app-sparkplug-export"
+
+# Using default Trigger config from common config
