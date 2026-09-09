@@ -10,9 +10,15 @@ services:
     image: eclipse-mosquitto:2
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    # Overriding the entrypoint below bypasses the image's own root->mosquitto-user privilege
+    # drop, so this runs as root - needed to write the generated passwd file into
+    # /mosquitto/config, which the image ships owned by root, not the mosquitto user. mosquitto
+    # itself still drops privilege to the mosquitto user once started, so the generated file's
+    # ownership/permissions are fixed up to match what it expects before that happens.
+    user: "0:0"
     entrypoint: ["sh", "-c"]
     command:
-      - "mosquitto_passwd -b -c /mosquitto/config/passwd admin changeme && exec mosquitto -c /mosquitto/config/mosquitto.conf"
+      - "mosquitto_passwd -b -c /mosquitto/config/passwd admin changeme && chown mosquitto:mosquitto /mosquitto/config/passwd && chmod 0700 /mosquitto/config/passwd && exec mosquitto -c /mosquitto/config/mosquitto.conf"
     healthcheck:
       test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 -i healthcheck-probe >/dev/null 2>&1"]
       interval: 5s
