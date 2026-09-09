@@ -1,0 +1,61 @@
+# Sparkplug B compliance test environment: this repo's Sparkplug Edge Node (`sparkplug-export`
+# profile) plus Eclipse Tahu's reference Host Application, both against a local Mosquitto broker.
+# See docs/testing/tahu-compliance-testing.md for how to run and interpret this.
+#
+# Nothing here is exposed on the host: every check the test script performs runs via
+# `docker compose exec`/`docker compose logs`, so this is safe to run in CI without any host
+# port allocation.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - "mosquitto_passwd -b -c /mosquitto/config/passwd admin changeme && exec mosquitto -c /mosquitto/config/mosquitto.conf"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 -i healthcheck-probe >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Eclipse Tahu's reference Sparkplug B Host Application: a fixed demo app whose broker address
+  # (tcp://localhost:1883) is hardcoded, so this joins mosquitto's network namespace instead of
+  # using a service-name hostname. See Dockerfile.tahu-host for why.
+  tahu-host-compat:
+    build:
+      context: .
+      dockerfile: Dockerfile.tahu-host
+    network_mode: "service:mosquitto"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - tahu-commands:/tmp/commands
+
+  # This repo's own service, running the sparkplug-export profile. Also joins mosquitto's network
+  # namespace so the profile's default BrokerAddress ("tcp://localhost:1883") resolves without
+  # any override, and so the HTTP trigger endpoint used by the test script (see
+  # docs/testing/tahu-compliance-testing.md) is reachable via `docker compose exec` without
+  # publishing any port to the host.
+  sparkplug-export:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    network_mode: "service:mosquitto"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      EDGEX_PROFILE: sparkplug-export
+      # No Configuration Provider/registry for this standalone test; override the trigger to HTTP
+      # so the test script can push a sample event without a running EdgeX MessageBus/core-data.
+      TRIGGER_TYPE: http
+      # Exercises the bdSeq-persistence fix (internal/sparkplug/node.go's nextBdSeq) across the
+      # test script's mid-run restart: this path survives a `docker compose restart` (same
+      # container, same filesystem) even though it wouldn't survive a full recreate.
+      SPARKPLUGCONFIG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
+    command: []
+
+volumes:
+  tahu-commands:

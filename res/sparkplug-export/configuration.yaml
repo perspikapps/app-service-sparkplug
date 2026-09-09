@@ -37,6 +37,12 @@ SparkplugConfig:
   AuthMode: "none"
   QoS: 0
   SkipCertVerify: false
+  # BdSeqStatePath, if set to a writable local file path, persists bdSeq across process restarts
+  # (read, increment, write back) so a Primary Host Application can tell a genuine new Edge Node
+  # session apart from a replay. Left empty here: bdSeq starts at 0 on every restart, which is
+  # fine for local development but worth setting on a durable path in production, e.g.:
+  # BdSeqStatePath: "/data/sparkplug-bdseq"
+  BdSeqStatePath: ""
 
 InsecureSecrets:
   mqtt:

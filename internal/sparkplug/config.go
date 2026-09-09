@@ -19,6 +19,10 @@ type Config struct {
 	AuthMode       string
 	QoS            int
 	SkipCertVerify bool
+	// BdSeqStatePath, if set, is a local file NewNode uses to persist bdSeq across process
+	// restarts (read, increment, write back) so a Primary Host Application can tell a genuine
+	// new Edge Node session apart from a replay. When empty, bdSeq starts at 0 on every restart.
+	BdSeqStatePath string
 }
 
 // ServiceConfig is the top-level struct passed to ApplicationService.LoadCustomConfig. Its

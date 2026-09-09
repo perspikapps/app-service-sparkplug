@@ -1,0 +1,12 @@
+[
+  {"name": "asset_id", "type": "STRING", "mode": "REQUIRED", "description": "Primary key."},
+  {"name": "site_id", "type": "STRING", "mode": "NULLABLE", "description": "Site identifier."},
+  {"name": "site_name", "type": "STRING", "mode": "NULLABLE", "description": "Human-readable site name."},
+  {"name": "latitude", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "longitude", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "building", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "floor", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "area", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "parent_asset_id", "type": "STRING", "mode": "NULLABLE", "description": "Self-referencing FK into dim_asset, for an asset hierarchy (e.g. site -> building -> line -> device)."},
+  {"name": "timezone", "type": "STRING", "mode": "NULLABLE", "description": "IANA timezone name, e.g. 'America/Chicago'."}
+]

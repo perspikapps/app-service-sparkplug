@@ -55,7 +55,7 @@ func main() {
 
 	var sparkplugFn interfaces.AppFunction
 	if sparkplugConfig.SparkplugConfig.Enabled {
-		node, err := sparkplug.NewNode(sparkplugConfig.SparkplugConfig, service.SecretProvider(), lc)
+		node, err := sparkplug.NewNode(sparkplugConfig.SparkplugConfig, service.SecretProvider(), lc, service.MetricsManager())
 		if err != nil {
 			lc.Errorf("failed to create Sparkplug node: %s", err.Error())
 			os.Exit(-1)

@@ -3,12 +3,17 @@ package sparkplug
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	bootstrapInterfaces "github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/interfaces"
+	bootstrapMessaging "github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/messaging"
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/clients/logger"
+	gometrics "github.com/rcrowley/go-metrics"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/edgexfoundry/app-functions-sdk-go/v4/pkg/secure"
@@ -36,7 +41,22 @@ const (
 
 	connectTimeout = 30 * time.Second
 	publishTimeout = 10 * time.Second
+
+	// go-metrics counters registered with the service's MetricsManager, giving an operator
+	// visibility into publish failures and rebirths without having to scrape the broker.
+	counterPublishErrors     = "SparkplugPublishErrors"
+	counterRebirths          = "SparkplugRebirths"
+	counterMessagesPublished = "SparkplugMessagesPublished"
 )
+
+// validAuthModes are the AuthMode values secure.NewMqttFactory understands, re-exposed here so
+// NewNode can reject a typo'd AuthMode up front instead of failing later inside the MQTT factory.
+var validAuthModes = map[string]bool{
+	bootstrapMessaging.AuthModeNone:             true,
+	bootstrapMessaging.AuthModeUsernamePassword: true,
+	bootstrapMessaging.AuthModeCert:             true,
+	bootstrapMessaging.AuthModeCA:               true,
+}
 
 // device tracks the Sparkplug birth state for a single EdgeX device: the metric name->alias
 // table built up as new metrics are seen, and the most recently published metric set (kept so a
@@ -50,10 +70,21 @@ type device struct {
 // Node manages one Sparkplug B Edge Node session: its MQTT connection and Will, the NBIRTH/NDEATH
 // and per-device DBIRTH/DDATA lifecycle, the node-level sequence counter, and the set of EdgeX
 // devices it has seen so far. One Node corresponds to one running instance of this service.
+//
+// Known limitations, deliberately out of scope for now:
+//   - A device is never explicitly marked dead with a DDEATH when its underlying EdgeX device is
+//     deleted/disabled — it just stops receiving DDATA. Emitting DDEATH on removal would need a
+//     subscription to EdgeX core-metadata's device lifecycle events, a separate, larger change.
+//   - Primary Host Application STATE monitoring and DCMD per-device command dispatch are not
+//     implemented; see the package's design notes.
 type Node struct {
 	cfg    Config
 	lc     logger.LoggingClient
 	client mqtt.Client
+
+	publishErrors     gometrics.Counter
+	rebirths          gometrics.Counter
+	messagesPublished gometrics.Counter
 
 	mu        sync.Mutex
 	bdSeq     uint64
@@ -63,17 +94,28 @@ type Node struct {
 }
 
 // NewNode builds a Node and its underlying MQTT client, with the Will configured to publish
-// NDEATH on ungraceful disconnect. Call Start to actually connect.
-func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.LoggingClient) (*Node, error) {
+// NDEATH on ungraceful disconnect. Call Start to actually connect. metrics may be nil, in which
+// case the counters described on Node are silently not registered/updated (used by tests).
+func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.LoggingClient, metrics bootstrapInterfaces.MetricsManager) (*Node, error) {
 	if cfg.GroupId == "" || cfg.EdgeNodeId == "" || cfg.BrokerAddress == "" {
 		return nil, fmt.Errorf("sparkplug: GroupId, EdgeNodeId and BrokerAddress are all required")
 	}
+	if !validAuthModes[cfg.AuthMode] {
+		return nil, fmt.Errorf("sparkplug: AuthMode '%s' is not one of 'none', 'usernamepassword', 'cacert' or 'clientcert'", cfg.AuthMode)
+	}
+	if cfg.QoS < 0 || cfg.QoS > 2 {
+		return nil, fmt.Errorf("sparkplug: QoS must be 0, 1 or 2, got %d", cfg.QoS)
+	}
 
 	n := &Node{
-		cfg:       cfg,
-		lc:        lc,
-		nextAlias: firstDeviceAlias,
-		devices:   make(map[string]*device),
+		cfg:               cfg,
+		lc:                lc,
+		bdSeq:             nextBdSeq(cfg.BdSeqStatePath, lc),
+		nextAlias:         firstDeviceAlias,
+		devices:           make(map[string]*device),
+		publishErrors:     registerCounter(metrics, counterPublishErrors, lc),
+		rebirths:          registerCounter(metrics, counterRebirths, lc),
+		messagesPublished: registerCounter(metrics, counterMessagesPublished, lc),
 	}
 
 	deathPayload, err := n.deathPayload()
@@ -185,6 +227,7 @@ func (n *Node) rebirth() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	incCounter(n.rebirths)
 	n.seq = 0
 	for _, d := range n.devices {
 		d.born = false
@@ -206,6 +249,12 @@ func (n *Node) rebirth() error {
 // first time it's seen, or whenever a metric name not covered by an earlier DBIRTH appears.
 // Otherwise it publishes a DDATA referencing existing aliases only, per the spec's recommendation
 // of omitting names from data messages to save bandwidth.
+//
+// This holds n.mu for the entire publish, including the network round trip (up to
+// publishTimeout), so concurrent calls for different devices serialize behind whichever one is
+// currently talking to the broker. That's intentional, not an oversight: Sparkplug's seq counter
+// must reach the wire in the same order it's consumed, and releasing the lock before the network
+// write would let two publishes race past each other and land out of order.
 func (n *Node) PublishDeviceData(deviceName string, metrics []Metric) error {
 	if len(metrics) == 0 {
 		return nil
@@ -321,15 +370,23 @@ func (n *Node) newPayload(metrics []*spplugb.Payload_Metric) *spplugb.Payload {
 func (n *Node) publish(msgType, deviceName string, payload *spplugb.Payload) error {
 	data, err := proto.Marshal(payload)
 	if err != nil {
+		incCounter(n.publishErrors)
 		return fmt.Errorf("sparkplug: failed to marshal %s payload: %w", msgType, err)
 	}
 
 	topic := n.topic(msgType, deviceName)
 	token := n.client.Publish(topic, byte(n.cfg.QoS), false, data)
 	if !token.WaitTimeout(publishTimeout) {
+		incCounter(n.publishErrors)
 		return fmt.Errorf("sparkplug: timed out publishing to %s", topic)
 	}
-	return token.Error()
+	if err := token.Error(); err != nil {
+		incCounter(n.publishErrors)
+		return err
+	}
+
+	incCounter(n.messagesPublished)
+	return nil
 }
 
 // topic builds a Sparkplug B topic for this Edge Node: spBv1.0/{group}/{msgType}/{edgeNode}, or
@@ -345,6 +402,60 @@ func (n *Node) topic(msgType, deviceName string) string {
 // use. Epoch milliseconds only go negative for times before 1970, never the case here.
 func unixMilliTimestamp(t time.Time) uint64 {
 	return uint64(t.UnixMilli()) //nolint:gosec
+}
+
+// nextBdSeq returns the bdSeq value for this session. When path is empty, bdSeq is volatile and
+// starts at 0 every run (today's behavior). When set, it reads the last persisted value from
+// path, increments it, and writes the new value back so a Primary Host Application can tell a
+// genuine new session apart from a replay across restarts. Any read/write failure (missing file
+// on first run, corrupt content, unwritable path) is logged as a warning and falls back to 0
+// rather than failing startup.
+func nextBdSeq(path string, lc logger.LoggingClient) uint64 {
+	if path == "" {
+		return 0
+	}
+
+	var seq uint64
+	if data, err := os.ReadFile(path); err == nil {
+		parsed, perr := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		if perr != nil {
+			lc.Warnf("sparkplug: bdSeq state file '%s' has invalid content, starting bdSeq at 0: %v", path, perr)
+		} else {
+			seq = parsed + 1
+		}
+	} else if !os.IsNotExist(err) {
+		lc.Warnf("sparkplug: failed to read bdSeq state file '%s', starting bdSeq at 0: %v", path, err)
+	}
+
+	if err := os.WriteFile(path, []byte(strconv.FormatUint(seq, 10)), 0o600); err != nil {
+		lc.Warnf("sparkplug: failed to persist bdSeq to '%s': %v", path, err)
+	}
+
+	return seq
+}
+
+// registerCounter registers and returns a go-metrics Counter named "Sparkplug-"+name with the
+// service's MetricsManager, or nil if metrics is nil (used by tests that don't exercise metrics).
+// Registration failures (e.g. already registered) are logged and result in a nil counter, since a
+// missing metric shouldn't stop the node from starting.
+func registerCounter(metrics bootstrapInterfaces.MetricsManager, name string, lc logger.LoggingClient) gometrics.Counter {
+	if metrics == nil {
+		return nil
+	}
+
+	counter := gometrics.NewCounter()
+	if err := metrics.Register(name, counter, nil); err != nil {
+		lc.Warnf("sparkplug: failed to register metric '%s': %v", name, err)
+		return nil
+	}
+	return counter
+}
+
+// incCounter increments counter by 1, tolerating a nil counter (metrics disabled/unregistered).
+func incCounter(counter gometrics.Counter) {
+	if counter != nil {
+		counter.Inc(1)
+	}
 }
 
 // newProtoMetric builds a *spplugb.Payload_Metric for the given name/alias/value, including the

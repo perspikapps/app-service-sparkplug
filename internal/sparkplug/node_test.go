@@ -1,12 +1,17 @@
 package sparkplug
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	bootstrapMocks "github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/interfaces/mocks"
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/clients/logger"
+	gometrics "github.com/rcrowley/go-metrics"
+	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/edgexfoundry/app-service-configurable/internal/sparkplug/spplugb"
@@ -305,8 +310,135 @@ func TestDeathPayload_CarriesBdSeq(t *testing.T) {
 }
 
 func TestNewNode_RequiresGroupEdgeNodeAndBroker(t *testing.T) {
-	_, err := NewNode(Config{AuthMode: "none"}, nil, logger.NewMockClient())
+	_, err := NewNode(Config{AuthMode: "none"}, nil, logger.NewMockClient(), nil)
 	if err == nil {
 		t.Fatal("expected error for missing required config fields")
+	}
+}
+
+func TestNewNode_RejectsInvalidAuthMode(t *testing.T) {
+	_, err := NewNode(Config{
+		GroupId:       "TestGroup",
+		EdgeNodeId:    "TestNode",
+		BrokerAddress: "tcp://localhost:1883",
+		AuthMode:      "bogus",
+	}, nil, logger.NewMockClient(), nil)
+	if err == nil {
+		t.Fatal("expected error for invalid AuthMode")
+	}
+}
+
+func TestNewNode_RejectsOutOfRangeQoS(t *testing.T) {
+	_, err := NewNode(Config{
+		GroupId:       "TestGroup",
+		EdgeNodeId:    "TestNode",
+		BrokerAddress: "tcp://localhost:1883",
+		AuthMode:      "none",
+		QoS:           3,
+	}, nil, logger.NewMockClient(), nil)
+	if err == nil {
+		t.Fatal("expected error for out-of-range QoS")
+	}
+}
+
+func TestNextBdSeq_VolatileWhenPathEmpty(t *testing.T) {
+	lc := logger.NewMockClient()
+	if got := nextBdSeq("", lc); got != 0 {
+		t.Errorf("nextBdSeq(\"\") = %d, want 0", got)
+	}
+	if got := nextBdSeq("", lc); got != 0 {
+		t.Errorf("nextBdSeq(\"\") on second call = %d, want 0 (volatile, no persistence)", got)
+	}
+}
+
+func TestNextBdSeq_PersistsAndIncrementsAcrossCalls(t *testing.T) {
+	lc := logger.NewMockClient()
+	path := t.TempDir() + "/bdseq"
+
+	first := nextBdSeq(path, lc)
+	if first != 0 {
+		t.Fatalf("first call: nextBdSeq() = %d, want 0 (no prior state)", first)
+	}
+
+	second := nextBdSeq(path, lc)
+	if second != 1 {
+		t.Fatalf("second call: nextBdSeq() = %d, want 1 (incremented from persisted 0)", second)
+	}
+
+	third := nextBdSeq(path, lc)
+	if third != 2 {
+		t.Fatalf("third call: nextBdSeq() = %d, want 2 (incremented from persisted 1)", third)
+	}
+}
+
+func TestNextBdSeq_FallsBackToZeroOnCorruptState(t *testing.T) {
+	lc := logger.NewMockClient()
+	path := t.TempDir() + "/bdseq"
+	if err := os.WriteFile(path, []byte("not-a-number"), 0o600); err != nil {
+		t.Fatalf("failed to seed corrupt state file: %v", err)
+	}
+
+	if got := nextBdSeq(path, lc); got != 0 {
+		t.Errorf("nextBdSeq() with corrupt state = %d, want 0 (fallback)", got)
+	}
+}
+
+func TestNode_MetricsCounters(t *testing.T) {
+	client := newFakeClient()
+	n := testNode(client)
+
+	published := gometrics.NewCounter()
+	errors := gometrics.NewCounter()
+	rebirths := gometrics.NewCounter()
+	n.messagesPublished = published
+	n.publishErrors = errors
+	n.rebirths = rebirths
+
+	if err := n.rebirth(); err != nil {
+		t.Fatalf("rebirth() error = %v", err)
+	}
+	if rebirths.Count() != 1 {
+		t.Errorf("rebirths counter = %d, want 1", rebirths.Count())
+	}
+	if published.Count() != 1 {
+		t.Errorf("messagesPublished counter = %d, want 1 (NBIRTH)", published.Count())
+	}
+	if errors.Count() != 0 {
+		t.Errorf("publishErrors counter = %d, want 0", errors.Count())
+	}
+}
+
+func TestNode_MetricsCounters_TolerateNilCounters(t *testing.T) {
+	client := newFakeClient()
+	n := testNode(client) // publishErrors/rebirths/messagesPublished left nil
+
+	if err := n.rebirth(); err != nil {
+		t.Fatalf("rebirth() with nil counters should not panic or error: %v", err)
+	}
+}
+
+func TestRegisterCounter_RegistersWithMetricsManager(t *testing.T) {
+	metrics := &bootstrapMocks.MetricsManager{}
+	metrics.On("Register", counterPublishErrors, mock.Anything, mock.Anything).Return(nil)
+
+	counter := registerCounter(metrics, counterPublishErrors, logger.NewMockClient())
+	if counter == nil {
+		t.Fatal("expected non-nil counter on successful registration")
+	}
+	metrics.AssertCalled(t, "Register", counterPublishErrors, mock.Anything, mock.Anything)
+}
+
+func TestRegisterCounter_NilMetricsManagerReturnsNilCounter(t *testing.T) {
+	if got := registerCounter(nil, counterPublishErrors, logger.NewMockClient()); got != nil {
+		t.Errorf("expected nil counter when metrics manager is nil, got %v", got)
+	}
+}
+
+func TestRegisterCounter_RegistrationErrorReturnsNilCounter(t *testing.T) {
+	metrics := &bootstrapMocks.MetricsManager{}
+	metrics.On("Register", counterPublishErrors, mock.Anything, mock.Anything).Return(errors.New("boom"))
+
+	if got := registerCounter(metrics, counterPublishErrors, logger.NewMockClient()); got != nil {
+		t.Errorf("expected nil counter when registration fails, got %v", got)
 	}
 }

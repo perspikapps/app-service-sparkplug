@@ -1,4 +1,4 @@
-.PHONY: build tidy docker test clean vendor protobuf
+.PHONY: build tidy docker test clean vendor protobuf compliance-test
 
 # change the following boolean flag to enable or disable the Full RELRO (RELocation Read Only) for linux ELF (Executable and Linkable Format) binaries
 ENABLE_FULL_RELRO=true
@@ -90,3 +90,8 @@ vendor:
 #   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 protobuf:
 	protoc --go_out=. --go_opt=paths=source_relative internal/sparkplug/spplugb/sparkplug_b.proto
+
+# Runs the Sparkplug B compliance test against Eclipse Tahu's reference Host Application.
+# Requires Docker and Compose v2. See docs/testing/tahu-compliance-testing.md.
+compliance-test:
+	cd test/tahu-compliance && ./run-compliance-test.sh

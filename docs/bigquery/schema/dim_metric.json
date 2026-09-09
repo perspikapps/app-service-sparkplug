@@ -1,0 +1,14 @@
+[
+  {"name": "group_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Group ID."},
+  {"name": "edge_node_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Edge Node ID."},
+  {"name": "device_id", "type": "STRING", "mode": "NULLABLE", "description": "Sparkplug Device ID. Null for node-level metrics."},
+  {"name": "metric_name", "type": "STRING", "mode": "REQUIRED", "description": "Metric name as published in Sparkplug BIRTH messages."},
+  {"name": "normalized_tag", "type": "STRING", "mode": "REQUIRED", "description": "Canonical/normalized tag name, e.g. 'zone_4.temperature'."},
+  {"name": "field_tag", "type": "STRING", "mode": "NULLABLE", "description": "The raw source-system tag/point name before normalization, e.g. 'AI_014'."},
+  {"name": "data_origin", "type": "STRING", "mode": "REQUIRED", "description": "One of 'sensor' (direct physical measurement), 'aggregate' (computed rollup), 'virtual' (calculated/derived, no direct sensor), 'manual' (human-entered)."},
+  {"name": "unit_of_measure", "type": "STRING", "mode": "NULLABLE", "description": "e.g. 'degC', 'kPa'."},
+  {"name": "description", "type": "STRING", "mode": "NULLABLE", "description": "Free-text description."},
+  {"name": "asset_id", "type": "STRING", "mode": "NULLABLE", "description": "Foreign key into dim_asset."},
+  {"name": "effective_from", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Start of validity for this row (slowly-changing-dimension versioning)."},
+  {"name": "effective_to", "type": "TIMESTAMP", "mode": "NULLABLE", "description": "End of validity for this row. Null means currently active."}
+]

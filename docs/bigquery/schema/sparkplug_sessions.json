@@ -1,0 +1,8 @@
+[
+  {"name": "group_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Group ID."},
+  {"name": "edge_node_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Edge Node ID."},
+  {"name": "bd_seq", "type": "INT64", "mode": "REQUIRED", "description": "The birth/death sequence number identifying this MQTT session."},
+  {"name": "birth_time", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Timestamp of the NBIRTH that started this session."},
+  {"name": "death_time", "type": "TIMESTAMP", "mode": "NULLABLE", "description": "Timestamp the session was recorded as dead. Null while the consumer believes the session is still alive."},
+  {"name": "death_reason", "type": "STRING", "mode": "NULLABLE", "description": "How the death was detected, e.g. 'NDEATH', 'will', 'gap-detected', 'stale-timeout'."}
+]
