@@ -57,6 +57,10 @@ services:
       # No Configuration Provider/registry for this standalone test; override the trigger to HTTP
       # so the test script can push a sample event without a running EdgeX MessageBus/core-data.
       TRIGGER_TYPE: http
+      # No Vault/SecretStore running here either (AuthMode is "none" for MQTT, no real secrets
+      # needed) - without this, the SDK's bootstrap retries reading a token file for 60s and then
+      # fails startup entirely, so the Sparkplug Node's NBIRTH never happens.
+      EDGEX_SECURITY_SECRET_STORE: "false"
       # Exercises the bdSeq-persistence fix (internal/sparkplug/node.go's nextBdSeq) across the
       # test script's mid-run restart: this path survives a `docker compose restart` (same
       # container, same filesystem) even though it wouldn't survive a full recreate.
