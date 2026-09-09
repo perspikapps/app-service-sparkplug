@@ -53,7 +53,6 @@ services:
       mosquitto:
         condition: service_healthy
     environment:
-      EDGEX_PROFILE: sparkplug-export
       # No Configuration Provider/registry for this standalone test; override the trigger to HTTP
       # so the test script can push a sample event without a running EdgeX MessageBus/core-data.
       TRIGGER_TYPE: http
@@ -65,7 +64,12 @@ services:
       # test script's mid-run restart: this path survives a `docker compose restart` (same
       # container, same filesystem) even though it wouldn't survive a full recreate.
       SPARKPLUGCONFIG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
-    command: []
+    # Replaces the base image's default CMD (-cp=keeper.http://edgex-core-keeper:59890 --registry),
+    # which an empty `command: []` was proven NOT to reliably clear. res/sparkplug-export/
+    # configuration.yaml is already provisioned into the image (Dockerfile's `COPY .../res/ /res/`),
+    # so selecting the profile is the only flag this standalone test needs - no Configuration
+    # Provider/registry flags are passed at all, so the SDK loads that file directly.
+    command: ["--profile=sparkplug-export"]
 
 volumes:
   tahu-commands:
