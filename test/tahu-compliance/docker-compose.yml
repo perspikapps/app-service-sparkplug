@@ -64,6 +64,14 @@ services:
       # test script's mid-run restart: this path survives a `docker compose restart` (same
       # container, same filesystem) even though it wouldn't survive a full recreate.
       SPARKPLUGCONFIG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
+      # The profile's own configuration.yaml doesn't fill in MessageBus.Host/Port/Protocol/Type -
+      # in a full EdgeX deployment those come from common config via a Configuration Provider,
+      # which this standalone test deliberately has neither of. The SDK's internal MessageBus
+      # client is bootstrapped unconditionally (independent of TRIGGER_TYPE), so without this it
+      # fails bootstrap outright ("MessageBus configuration is incomplete"). This test has no use
+      # for the internal EdgeX MessageBus at all (HTTP trigger, Sparkplug's own MQTT client is
+      # separate), so disable it outright rather than fill in unused broker fields.
+      MESSAGEBUS_DISABLED: "true"
     # Replaces the base image's default CMD (-cp=keeper.http://edgex-core-keeper:59890 --registry),
     # which an empty `command: []` was proven NOT to reliably clear. res/sparkplug-export/
     # configuration.yaml is already provisioned into the image (Dockerfile's `COPY .../res/ /res/`),
