@@ -77,7 +77,10 @@ services:
     # configuration.yaml is already provisioned into the image (Dockerfile's `COPY .../res/ /res/`),
     # so selecting the profile is the only flag this standalone test needs - no Configuration
     # Provider/registry flags are passed at all, so the SDK loads that file directly.
-    command: ["--profile=sparkplug-export"]
+    # --skipVersionCheck: the SDK's VersionValidator otherwise looks up a "core-metadata" entry
+    # under Clients (normally supplied by common config) just to compare version numbers - nothing
+    # this test needs, since there's no real core-metadata running here at all.
+    command: ["--profile=sparkplug-export", "--skipVersionCheck"]
 
 volumes:
   tahu-commands:
