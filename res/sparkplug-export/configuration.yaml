@@ -60,6 +60,12 @@ Service:
   StartupMsg: "app-sparkplug-export has Started"
 
 MessageBus:
+  # Explicit so this key exists in the parsed file and can be overridden by the MESSAGEBUS_DISABLED
+  # env var (e.g. in test/tahu-compliance/docker-compose.yml) - env var overrides only match keys
+  # actually present in this file, not zero-valued struct fields. false preserves today's behavior
+  # (MessageBus enabled), since Host/Port/Protocol/Type are expected to come from common config in
+  # a full EdgeX deployment.
+  Disabled: false
   Optional:
     ClientId: "app-sparkplug-export"
 
