@@ -58,6 +58,11 @@ Service:
   Host: "localhost"
   Port: 59708
   StartupMsg: "app-sparkplug-export has Started"
+  # Normally supplied by common config in a full EdgeX deployment (via a Configuration Provider);
+  # explicit here so this profile also boots standalone, without one. "5s" matches the standard
+  # EdgeX-wide default (see go-mod-bootstrap's own test fixtures), so this shouldn't diverge from
+  # what common config would otherwise provide.
+  RequestTimeout: "5s"
 
 MessageBus:
   # Explicit so this key exists in the parsed file and can be overridden by the MESSAGEBUS_DISABLED
