@@ -56,8 +56,23 @@ fail_if_rebirth_requested() {
   fi
 }
 
-echo "==> Building and starting the compliance test stack"
-$COMPOSE up -d --build
+echo "==> Building and starting mosquitto and tahu-host-compat"
+$COMPOSE up -d --build mosquitto tahu-host-compat
+
+# tahu-host-compat must be connected and subscribed to spBv1.0/# *before* sparkplug-export starts:
+# Sparkplug BIRTH/DATA messages are never retained (per spec, and confirmed in our own publish()),
+# so if sparkplug-export published its initial NBIRTH before tahu-host-compat's subscription was
+# active, that NBIRTH would be lost to the void - a real race, not a config issue, since our lean
+# Go binary connects and publishes in ~1ms while the JVM host app takes several hundred ms just to
+# start attempting its own MQTT connect.
+echo "==> Waiting for tahu-host-compat to connect and subscribe"
+if ! wait_for_log tahu-host-compat "server Mqtt Server One - Successfully subscribed on \[spBv1.0/#" "$BIRTH_TIMEOUT_SECS"; then
+  echo "FAIL: tahu-host-compat never subscribed to the Sparkplug topic namespace."
+  exit 1
+fi
+
+echo "==> Building and starting sparkplug-export"
+$COMPOSE up -d --build sparkplug-export
 
 echo "==> Waiting for our Edge Node's NBIRTH to be accepted"
 if ! wait_for_log tahu-host-compat "onNodeBirthComplete from" "$BIRTH_TIMEOUT_SECS"; then

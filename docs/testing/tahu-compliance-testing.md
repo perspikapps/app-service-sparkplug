@@ -35,6 +35,15 @@ down.
 
 ## What the script checks, and why
 
+0. **`tahu-host-compat` starts before `sparkplug-export`, deliberately, not just by `depends_on`
+   luck.** Sparkplug BIRTH/DATA messages are never retained (per spec, and confirmed in our own
+   `publish()`), so a subscriber that isn't listening yet simply never sees them — there's no
+   redelivery. Our own service connects and publishes in about a millisecond, while the JVM-based
+   `tahu-host-compat` takes a few hundred ms just to start attempting its MQTT connection, so
+   starting both at once would race, and the very first NBIRTH would frequently be lost before
+   `tahu-host-compat` ever subscribed. The script starts `mosquitto` and `tahu-host-compat` first,
+   waits for `tahu-host-compat`'s log to show it successfully subscribed to `spBv1.0/#`, and only
+   then starts `sparkplug-export`.
 1. **Our Edge Node's initial NBIRTH is accepted** — waits for `tahu-host-compat`'s log to show
    `onNodeBirthComplete from ...` (confirmed against `SparkplugHostApplication.java`'s actual
    event-handler log lines), and fails if a rebirth was requested first
