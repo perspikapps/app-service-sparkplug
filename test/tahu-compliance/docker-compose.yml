@@ -52,10 +52,14 @@ services:
     depends_on:
       mosquitto:
         condition: service_healthy
+    volumes:
+      # Supplies Trigger.Type=http (see common-config.yaml) via EdgeX's own supported mechanism for
+      # this - go-mod-bootstrap's --commonConfig flag - rather than an env var override, since
+      # res/sparkplug-export/configuration.yaml has no Trigger section at all for an env var to
+      # match (that's deliberate: real deployments get Trigger.Type from real common config, and
+      # this test must not change that by adding it to the checked-in profile).
+      - ./common-config.yaml:/common-config.yaml:ro
     environment:
-      # No Configuration Provider/registry for this standalone test; override the trigger to HTTP
-      # so the test script can push a sample event without a running EdgeX MessageBus/core-data.
-      TRIGGER_TYPE: http
       # No Vault/SecretStore running here either (AuthMode is "none" for MQTT, no real secrets
       # needed) - without this, the SDK's bootstrap retries reading a token file for 60s and then
       # fails startup entirely, so the Sparkplug Node's NBIRTH never happens.
@@ -80,7 +84,8 @@ services:
     # --skipVersionCheck: the SDK's VersionValidator otherwise looks up a "core-metadata" entry
     # under Clients (normally supplied by common config) just to compare version numbers - nothing
     # this test needs, since there's no real core-metadata running here at all.
-    command: ["--profile=sparkplug-export", "--skipVersionCheck"]
+    # --commonConfig: see common-config.yaml and the volume mount above.
+    command: ["--profile=sparkplug-export", "--skipVersionCheck", "--commonConfig=/common-config.yaml"]
 
 volumes:
   tahu-commands:
