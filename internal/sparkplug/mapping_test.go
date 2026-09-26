@@ -174,3 +174,25 @@ func TestSetProtoValue_UnsupportedDataType(t *testing.T) {
 		t.Fatal("expected error for unsupported data type")
 	}
 }
+
+func TestSetProtoValue_NilValueIsNull(t *testing.T) {
+	pm := &spplugb.Payload_Metric{}
+	if err := setProtoValue(pm, spplugb.DataType_Double, nil); err != nil {
+		t.Fatalf("setProtoValue(nil) error = %v", err)
+	}
+	if !pm.GetIsNull() || pm.Value != nil {
+		t.Errorf("expected is_null with no value, got is_null=%v value=%v", pm.GetIsNull(), pm.Value)
+	}
+	if err := setProtoValue(&spplugb.Payload_Metric{}, spplugb.DataType_DataSet, nil); err == nil {
+		t.Error("expected error for a nil value of an unsupported data type")
+	}
+}
+
+func TestDataTypeFor(t *testing.T) {
+	if got, ok := dataTypeFor(common.ValueTypeFloat32); !ok || got != spplugb.DataType_Float {
+		t.Errorf("dataTypeFor(Float32) = %v, %v", got, ok)
+	}
+	if _, ok := dataTypeFor(common.ValueTypeObject); ok {
+		t.Error("expected Object to be unsupported")
+	}
+}

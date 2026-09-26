@@ -40,7 +40,7 @@ services:
       - tahu-commands:/tmp/commands
 
   # This repo's own service, running the sparkplug-export profile. Also joins mosquitto's network
-  # namespace so the profile's default BrokerAddress ("tcp://localhost:1883") resolves without
+  # namespace so the profile's default MqttBroker.Url ("tcp://localhost:1883") resolves without
   # any override, and so the HTTP trigger endpoint used by the test script (see
   # docs/testing/tahu-compliance-testing.md) is reachable via `docker compose exec` without
   # publishing any port to the host.
@@ -67,7 +67,10 @@ services:
       # Exercises the bdSeq-persistence fix (internal/sparkplug/node.go's nextBdSeq) across the
       # test script's mid-run restart: this path survives a `docker compose restart` (same
       # container, same filesystem) even though it wouldn't survive a full recreate.
-      SPARKPLUGCONFIG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
+      SPARKPLUG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
+      # No core-metadata runs here, so there is nothing to poll for device registration/removal;
+      # devices are born from their first reading instead (which is what the script exercises).
+      SPARKPLUG_DEVICELIFECYCLE_POLLINTERVAL: "0"
       # The profile's own configuration.yaml doesn't fill in MessageBus.Host/Port/Protocol/Type -
       # in a full EdgeX deployment those come from common config via a Configuration Provider,
       # which this standalone test deliberately has neither of. The SDK's internal MessageBus

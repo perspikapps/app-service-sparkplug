@@ -141,3 +141,29 @@ func TestNewExportFunction_WrongTypeReturnsError(t *testing.T) {
 		t.Fatal("expected pipeline to stop on wrong data type")
 	}
 }
+
+func TestNewExportFunction_NamesMetricsFromTags(t *testing.T) {
+	client := newFakeClient()
+	fn := NewExportFunction(testNode(client))
+
+	event := dtos.Event{
+		DeviceName:  "Thermostat1",
+		ProfileName: "ThermostatProfile",
+		Tags:        map[string]any{"metric_level1": "Building4"},
+		Readings: []dtos.BaseReading{{
+			ResourceName:  "temperature",
+			DeviceName:    "Thermostat1",
+			ValueType:     common.ValueTypeFloat64,
+			Tags:          map[string]any{"metric_level2": "Zone2"},
+			SimpleReading: dtos.SimpleReading{Value: "21.5"},
+		}},
+	}
+	if ok, result := fn(testContext(), event); !ok {
+		t.Fatalf("pipeline stopped: %v", result)
+	}
+
+	metrics := client.published[0].payload.GetMetrics()
+	if len(metrics) != 1 || metrics[0].GetName() != "Building4/Zone2/temperature" {
+		t.Fatalf("unexpected metrics: %+v", metrics)
+	}
+}

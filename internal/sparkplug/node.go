@@ -2,6 +2,8 @@ package sparkplug
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -22,13 +24,13 @@ import (
 )
 
 const (
-	namespace = "spBv1.0"
-
 	msgTypeNBirth = "NBIRTH"
 	msgTypeNDeath = "NDEATH"
 	msgTypeDBirth = "DBIRTH"
 	msgTypeDData  = "DDATA"
+	msgTypeDDeath = "DDEATH"
 	msgTypeNCmd   = "NCMD"
+	msgTypeDCmd   = "DCMD"
 
 	// metricBdSeq and metricNodeRebirth are the two well-known node metrics every NBIRTH/NDEATH
 	// must/should carry; they're given fixed aliases so they're recognizable across messages.
@@ -39,8 +41,8 @@ const (
 	aliasNodeRebirth = uint64(1)
 	firstDeviceAlias = uint64(2)
 
-	connectTimeout = 30 * time.Second
-	publishTimeout = 10 * time.Second
+	subscribeTimeout = 30 * time.Second
+	publishTimeout   = 10 * time.Second
 
 	// go-metrics counters registered with the service's MetricsManager, giving an operator
 	// visibility into publish failures and rebirths without having to scrape the broker.
@@ -59,28 +61,76 @@ var validAuthModes = map[string]bool{
 }
 
 // device tracks the Sparkplug birth state for a single EdgeX device: the metric name->alias
-// table built up as new metrics are seen, and the most recently published metric set (kept so a
-// DBIRTH can be replayed on reconnect/rebirth without waiting for fresh data).
+// table built up as new metrics are seen, and the latest value of every metric known for it (kept
+// so a DBIRTH always declares the device's complete metric set, and can be replayed on
+// reconnect/rebirth without waiting for fresh data).
 type device struct {
 	aliases map[string]uint64
-	metrics []Metric
-	born    bool
+	// metrics holds the latest Metric per name, in first-seen order; index maps name -> position.
+	metrics     []Metric
+	index       map[string]int
+	profileName string
+	born        bool
+	// registered is set once the device has been seen in core-metadata by the lifecycle poller;
+	// only such devices get a DDEATH when they later disappear from it.
+	registered bool
+}
+
+func newDevice(profileName string) *device {
+	return &device{aliases: make(map[string]uint64), index: make(map[string]int), profileName: profileName}
+}
+
+// merge records metrics as the device's latest values and reports whether any of them is a metric
+// name the device didn't know yet. A nil-valued metric (declared from a profile) never overwrites
+// a known value.
+func (d *device) merge(metrics []Metric) bool {
+	added := false
+	for _, m := range metrics {
+		i, ok := d.index[m.Name]
+		switch {
+		case !ok:
+			d.index[m.Name] = len(d.metrics)
+			d.metrics = append(d.metrics, m)
+			added = true
+		case m.Value != nil || d.metrics[i].Value == nil:
+			d.metrics[i] = m
+		}
+	}
+	return added
+}
+
+// metric returns the known metric with the given name, or the one using the given alias.
+func (d *device) metric(name string, alias *uint64) (Metric, bool) {
+	if name == "" && alias != nil {
+		for n, a := range d.aliases {
+			if a == *alias {
+				name = n
+				break
+			}
+		}
+	}
+	i, ok := d.index[name]
+	if !ok {
+		return Metric{}, false
+	}
+	return d.metrics[i], true
 }
 
 // Node manages one Sparkplug B Edge Node session: its MQTT connection and Will, the NBIRTH/NDEATH
-// and per-device DBIRTH/DDATA lifecycle, the node-level sequence counter, and the set of EdgeX
-// devices it has seen so far. One Node corresponds to one running instance of this service.
+// and per-device DBIRTH/DDATA/DDEATH lifecycle, the node-level sequence counter, inbound NCMD
+// rebirth and (opt-in) DCMD commands, and the set of EdgeX devices it knows about. One Node
+// corresponds to one running instance of this service.
 //
-// Known limitations, deliberately out of scope for now:
-//   - A device is never explicitly marked dead with a DDEATH when its underlying EdgeX device is
-//     deleted/disabled — it just stops receiving DDATA. Emitting DDEATH on removal would need a
-//     subscription to EdgeX core-metadata's device lifecycle events, a separate, larger change.
-//   - Primary Host Application STATE monitoring and DCMD per-device command dispatch are not
-//     implemented; see the package's design notes.
+// Primary Host Application STATE monitoring is not implemented; see docs/edge-xpert-compatibility.md.
 type Node struct {
 	cfg    Config
+	s      settings
 	lc     logger.LoggingClient
 	client mqtt.Client
+
+	// commands and profiles are set by EnableCommands; commands stays nil unless DCMD is enabled.
+	commands commandIssuer
+	profiles profileGetter
 
 	publishErrors     gometrics.Counter
 	rebirths          gometrics.Counter
@@ -97,18 +147,17 @@ type Node struct {
 // NDEATH on ungraceful disconnect. Call Start to actually connect. metrics may be nil, in which
 // case the counters described on Node are silently not registered/updated (used by tests).
 func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.LoggingClient, metrics bootstrapInterfaces.MetricsManager) (*Node, error) {
-	if cfg.GroupId == "" || cfg.EdgeNodeId == "" || cfg.BrokerAddress == "" {
-		return nil, fmt.Errorf("sparkplug: GroupId, EdgeNodeId and BrokerAddress are all required")
+	s, err := cfg.resolve()
+	if err != nil {
+		return nil, err
 	}
-	if !validAuthModes[cfg.AuthMode] {
-		return nil, fmt.Errorf("sparkplug: AuthMode '%s' is not one of 'none', 'usernamepassword', 'cacert' or 'clientcert'", cfg.AuthMode)
-	}
-	if cfg.QoS < 0 || cfg.QoS > 2 {
-		return nil, fmt.Errorf("sparkplug: QoS must be 0, 1 or 2, got %d", cfg.QoS)
+	if cfg.MqttBroker.Retain {
+		lc.Warn("sparkplug: MqttBroker.Retain is true; Sparkplug 3.0 requires BIRTH, DATA and DEATH messages to be non-retained")
 	}
 
 	n := &Node{
 		cfg:               cfg,
+		s:                 s,
 		lc:                lc,
 		bdSeq:             nextBdSeq(cfg.BdSeqStatePath, lc),
 		nextAlias:         firstDeviceAlias,
@@ -124,11 +173,13 @@ func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.Loggin
 	}
 
 	opts := mqtt.NewClientOptions().
-		AddBroker(cfg.BrokerAddress).
-		SetClientID(cfg.ClientId).
+		AddBroker(cfg.MqttBroker.Url).
+		SetClientID(clientID(s.clientIdPrefix)).
 		SetCleanSession(true).
-		SetAutoReconnect(true).
-		SetBinaryWill(n.topic(msgTypeNDeath, ""), deathPayload, byte(cfg.QoS), false)
+		SetConnectTimeout(s.connectTimeout).
+		SetKeepAlive(s.keepAlive).
+		SetAutoReconnect(cfg.MqttBroker.AutoReconnect).
+		SetBinaryWill(n.topic(msgTypeNDeath, ""), deathPayload, byte(cfg.MqttBroker.QoS), false)
 
 	opts.OnConnect = func(_ mqtt.Client) {
 		if err := n.onConnect(); err != nil {
@@ -139,7 +190,7 @@ func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.Loggin
 		n.lc.Warnf("sparkplug: connection to broker lost: %v", err)
 	}
 
-	factory := secure.NewMqttFactory(sp, lc, cfg.AuthMode, cfg.SecretName, cfg.SkipCertVerify)
+	factory := secure.NewMqttFactory(sp, lc, cfg.MqttBroker.AuthMode, cfg.MqttBroker.SecretPath, cfg.MqttBroker.SkipCertVerify)
 	client, err := factory.Create(opts)
 	if err != nil {
 		return nil, fmt.Errorf("sparkplug: failed to create mqtt client: %w", err)
@@ -149,16 +200,36 @@ func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.Loggin
 	return n, nil
 }
 
-// Start connects to the broker and returns once the initial NBIRTH has been published. It
-// registers a goroutine that publishes a best-effort NDEATH and disconnects cleanly when ctx is
-// cancelled, for graceful shutdown.
-func (n *Node) Start(ctx context.Context) error {
-	token := n.client.Connect()
-	if !token.WaitTimeout(connectTimeout) {
-		return fmt.Errorf("sparkplug: timed out connecting to broker %s", n.cfg.BrokerAddress)
+// clientID appends a random suffix to prefix, as Edge Xpert does, so a restarted process never
+// collides with a broker session the previous one still holds.
+func clientID(prefix string) string {
+	suffix := make([]byte, 4)
+	if _, err := rand.Read(suffix); err != nil {
+		return prefix
 	}
-	if err := token.Error(); err != nil {
-		return fmt.Errorf("sparkplug: failed to connect to broker %s: %w", n.cfg.BrokerAddress, err)
+	return prefix + "-" + hex.EncodeToString(suffix)
+}
+
+// Start connects to the broker, retrying every MqttBroker.RetryInterval for up to
+// MqttBroker.RetryDuration, and returns once connected (the initial NBIRTH is published from the
+// connect handler). It registers a goroutine that publishes a best-effort NDEATH and disconnects
+// cleanly when ctx is cancelled, for graceful shutdown.
+func (n *Node) Start(ctx context.Context) error {
+	deadline := time.Now().Add(n.s.retryDuration)
+	for {
+		err := n.connect()
+		if err == nil {
+			break
+		}
+		if time.Now().Add(n.s.retryInterval).After(deadline) {
+			return err
+		}
+		n.lc.Warnf("%v; retrying in %s", err, n.s.retryInterval)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(n.s.retryInterval):
+		}
 	}
 
 	go func() {
@@ -166,6 +237,17 @@ func (n *Node) Start(ctx context.Context) error {
 		n.shutdown()
 	}()
 
+	return nil
+}
+
+func (n *Node) connect() error {
+	token := n.client.Connect()
+	if !token.WaitTimeout(n.s.connectTimeout + publishTimeout) {
+		return fmt.Errorf("sparkplug: timed out connecting to broker %s", n.cfg.MqttBroker.Url)
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("sparkplug: failed to connect to broker %s: %w", n.cfg.MqttBroker.Url, err)
+	}
 	return nil
 }
 
@@ -177,31 +259,39 @@ func (n *Node) shutdown() {
 	n.mu.Unlock()
 
 	if err == nil && n.client.IsConnected() {
-		token := n.client.Publish(n.topic(msgTypeNDeath, ""), byte(n.cfg.QoS), false, payload)
+		token := n.client.Publish(n.topic(msgTypeNDeath, ""), byte(n.cfg.MqttBroker.QoS), n.cfg.MqttBroker.Retain, payload)
 		token.WaitTimeout(publishTimeout)
 	}
 	n.client.Disconnect(250)
 }
 
-// onConnect subscribes to this Edge Node's NCMD topic and performs an initial birth. It runs on
-// every successful (re)connect, since a new MQTT session invalidates any state a host application
-// previously had for this node.
+// onConnect subscribes to this Edge Node's NCMD topic (and DCMD topics, when commands are enabled)
+// and performs an initial birth. It runs on every successful (re)connect, since a new MQTT session
+// invalidates any state a host application previously had for this node.
 func (n *Node) onConnect() error {
-	topic := n.topic(msgTypeNCmd, "")
-	token := n.client.Subscribe(topic, byte(n.cfg.QoS), n.handleNCmd)
-	if !token.WaitTimeout(connectTimeout) {
+	if err := n.subscribe(n.topic(msgTypeNCmd, ""), n.handleNCmd); err != nil {
+		return err
+	}
+	if n.commands != nil {
+		if err := n.subscribe(n.topic(msgTypeDCmd, "+"), n.handleDCmd); err != nil {
+			return err
+		}
+	}
+	return n.rebirth()
+}
+
+func (n *Node) subscribe(topic string, handler mqtt.MessageHandler) error {
+	token := n.client.Subscribe(topic, byte(n.cfg.MqttBroker.QoS), handler)
+	if !token.WaitTimeout(subscribeTimeout) {
 		return fmt.Errorf("sparkplug: timed out subscribing to %s", topic)
 	}
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("sparkplug: failed to subscribe to %s: %w", topic, err)
 	}
-
-	return n.rebirth()
+	return nil
 }
 
-// handleNCmd reacts to the "Node Control/Rebirth" command, the only NCMD metric handled. Per-
-// device command dispatch (DCMD) would require forwarding into EdgeX's command service and is a
-// deferred future enhancement, not a mandatory edge-node behavior.
+// handleNCmd reacts to the "Node Control/Rebirth" command, the only NCMD metric handled.
 func (n *Node) handleNCmd(_ mqtt.Client, msg mqtt.Message) {
 	var payload spplugb.Payload
 	if err := proto.Unmarshal(msg.Payload(), &payload); err != nil {
@@ -246,16 +336,18 @@ func (n *Node) rebirth() error {
 }
 
 // PublishDeviceData publishes metrics for an EdgeX device, auto-birthing the device (DBIRTH) the
-// first time it's seen, or whenever a metric name not covered by an earlier DBIRTH appears.
-// Otherwise it publishes a DDATA referencing existing aliases only, per the spec's recommendation
-// of omitting names from data messages to save bandwidth.
+// first time it's seen, or whenever a metric name not covered by an earlier DBIRTH appears; the
+// DBIRTH always declares every metric known for the device, not only those in this call, since a
+// host application treats a DBIRTH as the device's complete metric set. Otherwise it publishes a
+// DDATA carrying just these metrics by alias, per the spec's recommendation of omitting names from
+// data messages to save bandwidth.
 //
 // This holds n.mu for the entire publish, including the network round trip (up to
 // publishTimeout), so concurrent calls for different devices serialize behind whichever one is
 // currently talking to the broker. That's intentional, not an oversight: Sparkplug's seq counter
 // must reach the wire in the same order it's consumed, and releasing the lock before the network
 // write would let two publishes race past each other and land out of order.
-func (n *Node) PublishDeviceData(deviceName string, metrics []Metric) error {
+func (n *Node) PublishDeviceData(deviceName, profileName string, metrics []Metric) error {
 	if len(metrics) == 0 {
 		return nil
 	}
@@ -265,21 +357,14 @@ func (n *Node) PublishDeviceData(deviceName string, metrics []Metric) error {
 
 	d, ok := n.devices[deviceName]
 	if !ok {
-		d = &device{aliases: make(map[string]uint64)}
+		d = newDevice(profileName)
 		n.devices[deviceName] = d
 	}
-
-	needsBirth := !d.born
-	for _, m := range metrics {
-		if _, known := d.aliases[m.Name]; !known {
-			needsBirth = true
-			break
-		}
+	if d.profileName == "" {
+		d.profileName = profileName
 	}
 
-	d.metrics = metrics
-
-	if needsBirth {
+	if added := d.merge(metrics); added || !d.born {
 		return n.publishDeviceBirth(deviceName, d)
 	}
 
@@ -293,6 +378,13 @@ func (n *Node) PublishDeviceData(deviceName string, metrics []Metric) error {
 	}
 
 	return n.publish(msgTypeDData, deviceName, n.newPayload(protoMetrics))
+}
+
+// publishDeviceDeath publishes DDEATH for a device (timestamp and seq only, per the spec) and
+// forgets it, so a device registered again later is born afresh. Callers must hold n.mu.
+func (n *Node) publishDeviceDeath(deviceName string) error {
+	delete(n.devices, deviceName)
+	return n.publish(msgTypeDDeath, deviceName, n.newPayload(nil))
 }
 
 // publishNodeBirth publishes NBIRTH for this Edge Node, carrying the two well-known node metrics:
@@ -366,7 +458,7 @@ func (n *Node) newPayload(metrics []*spplugb.Payload_Metric) *spplugb.Payload {
 }
 
 // publish marshals and publishes payload to the topic for msgType and (optionally) deviceName.
-// BIRTH/DATA/DEATH messages are never retained, per the spec. Callers must hold n.mu.
+// Messages are non-retained unless MqttBroker.Retain says otherwise. Callers must hold n.mu.
 func (n *Node) publish(msgType, deviceName string, payload *spplugb.Payload) error {
 	data, err := proto.Marshal(payload)
 	if err != nil {
@@ -375,7 +467,7 @@ func (n *Node) publish(msgType, deviceName string, payload *spplugb.Payload) err
 	}
 
 	topic := n.topic(msgType, deviceName)
-	token := n.client.Publish(topic, byte(n.cfg.QoS), false, data)
+	token := n.client.Publish(topic, byte(n.cfg.MqttBroker.QoS), n.cfg.MqttBroker.Retain, data)
 	if !token.WaitTimeout(publishTimeout) {
 		incCounter(n.publishErrors)
 		return fmt.Errorf("sparkplug: timed out publishing to %s", topic)
@@ -389,13 +481,13 @@ func (n *Node) publish(msgType, deviceName string, payload *spplugb.Payload) err
 	return nil
 }
 
-// topic builds a Sparkplug B topic for this Edge Node: spBv1.0/{group}/{msgType}/{edgeNode}, or
-// with a trailing /{deviceName} for device-scoped message types.
+// topic builds a Sparkplug B topic for this Edge Node: {namespace}/{group}/{msgType}/{edgeNode},
+// or with a trailing /{deviceName} for device-scoped message types.
 func (n *Node) topic(msgType, deviceName string) string {
 	if deviceName == "" {
-		return fmt.Sprintf("%s/%s/%s/%s", namespace, n.cfg.GroupId, msgType, n.cfg.EdgeNodeId)
+		return fmt.Sprintf("%s/%s/%s/%s", n.s.namespace, n.cfg.GroupId, msgType, n.cfg.EdgeNodeId)
 	}
-	return fmt.Sprintf("%s/%s/%s/%s/%s", namespace, n.cfg.GroupId, msgType, n.cfg.EdgeNodeId, deviceName)
+	return fmt.Sprintf("%s/%s/%s/%s/%s", n.s.namespace, n.cfg.GroupId, msgType, n.cfg.EdgeNodeId, deviceName)
 }
 
 // unixMilliTimestamp converts t to the milliseconds-since-epoch timestamp Sparkplug B payloads

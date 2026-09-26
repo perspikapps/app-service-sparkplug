@@ -7,6 +7,7 @@ import (
 
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/common"
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/dtos"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/edgexfoundry/app-service-configurable/internal/sparkplug/spplugb"
 )
@@ -15,13 +16,18 @@ import (
 // produced from an EdgeX reading and later turned into a *spplugb.Payload_Metric by the
 // node's payload builder.
 type Metric struct {
-	Name      string
-	Timestamp time.Time
-	DataType  spplugb.DataType
-	Value     any
+	// Name is the Sparkplug metric name, built from Payload.MetricNameFormat.
+	Name string
+	// ResourceName is the EdgeX device resource the metric came from, used to route DCMD writes.
+	ResourceName string
+	Timestamp    time.Time
+	DataType     spplugb.DataType
+	// Value is nil for a metric that is declared but has no value yet (published with is_null).
+	Value any
 }
 
-// MetricFromReading converts a single EdgeX reading into a Sparkplug Metric.
+// MetricFromReading converts a single EdgeX reading into a Sparkplug Metric, named by the bare
+// resource name; callers apply Payload.MetricNameFormat afterwards (see NewExportFunction).
 // Object and Array value types are not currently supported and result in an error so the
 // caller can skip just that reading rather than the whole event.
 func MetricFromReading(reading dtos.BaseReading) (Metric, error) {
@@ -31,11 +37,35 @@ func MetricFromReading(reading dtos.BaseReading) (Metric, error) {
 	}
 
 	return Metric{
-		Name:      reading.ResourceName,
-		Timestamp: time.Unix(0, reading.Origin),
-		DataType:  dataType,
-		Value:     value,
+		Name:         reading.ResourceName,
+		ResourceName: reading.ResourceName,
+		Timestamp:    time.Unix(0, reading.Origin),
+		DataType:     dataType,
+		Value:        value,
 	}, nil
+}
+
+// dataTypeFor returns the Sparkplug DataType for an EdgeX value type, or false if the value type
+// isn't supported for Sparkplug export.
+func dataTypeFor(valueType string) (spplugb.DataType, bool) {
+	dataType, ok := valueTypeDataTypes[valueType]
+	return dataType, ok
+}
+
+var valueTypeDataTypes = map[string]spplugb.DataType{
+	common.ValueTypeBool:    spplugb.DataType_Boolean,
+	common.ValueTypeString:  spplugb.DataType_String,
+	common.ValueTypeUint8:   spplugb.DataType_UInt8,
+	common.ValueTypeUint16:  spplugb.DataType_UInt16,
+	common.ValueTypeUint32:  spplugb.DataType_UInt32,
+	common.ValueTypeUint64:  spplugb.DataType_UInt64,
+	common.ValueTypeInt8:    spplugb.DataType_Int8,
+	common.ValueTypeInt16:   spplugb.DataType_Int16,
+	common.ValueTypeInt32:   spplugb.DataType_Int32,
+	common.ValueTypeInt64:   spplugb.DataType_Int64,
+	common.ValueTypeFloat32: spplugb.DataType_Float,
+	common.ValueTypeFloat64: spplugb.DataType_Double,
+	common.ValueTypeBinary:  spplugb.DataType_Bytes,
 }
 
 // mapValue maps an EdgeX reading's ValueType/Value to a Sparkplug DataType and a native Go
@@ -88,7 +118,17 @@ func mapValue(reading dtos.BaseReading) (spplugb.DataType, any, error) {
 // mapValue/MetricFromReading. The oneof's interface type is unexported by protoc-gen-go, so the
 // concrete *spplugb.Payload_Metric_XxxValue wrapper is assigned to pm.Value directly in each case
 // rather than being returned, which is the normal way to set a proto oneof from another package.
+//
+// A nil value marks the metric as declared but without a value (Sparkplug's is_null), used when a
+// device is born from its core-metadata profile before any reading has arrived.
 func setProtoValue(pm *spplugb.Payload_Metric, dataType spplugb.DataType, value any) error {
+	if value == nil {
+		if _, ok := protoDataTypes[dataType]; !ok {
+			return fmt.Errorf("unsupported sparkplug data type '%s'", dataType)
+		}
+		pm.IsNull = proto.Bool(true)
+		return nil
+	}
 	switch dataType {
 	case spplugb.DataType_Boolean:
 		pm.Value = &spplugb.Payload_Metric_BooleanValue{BooleanValue: value.(bool)}
@@ -119,3 +159,12 @@ func setProtoValue(pm *spplugb.Payload_Metric, dataType spplugb.DataType, value 
 	}
 	return nil
 }
+
+// protoDataTypes is the set of DataTypes setProtoValue supports.
+var protoDataTypes = func() map[spplugb.DataType]bool {
+	types := make(map[spplugb.DataType]bool, len(valueTypeDataTypes))
+	for _, dataType := range valueTypeDataTypes {
+		types[dataType] = true
+	}
+	return types
+}()

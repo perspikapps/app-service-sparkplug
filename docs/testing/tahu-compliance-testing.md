@@ -59,7 +59,7 @@ down.
    sparkplug-export` forces a brand new MQTT session; `tahu-host-compat` should show a fresh
    `onNodeBirthComplete` with no rebirth request. This also exercises the bdSeq-persistence fix
    (`internal/sparkplug/node.go`'s `nextBdSeq`): the compose file sets
-   `SPARKPLUGCONFIG_BDSEQSTATEPATH=/tmp/sparkplug-bdseq`, which survives a `restart` (same
+   `SPARKPLUG_BDSEQSTATEPATH=/tmp/sparkplug-bdseq`, which survives a `restart` (same
    container, same filesystem) even though it wouldn't survive a full recreate.
 
 Each check only looks at *new* log lines since the last checkpoint (tracked by line count), so a
@@ -75,7 +75,7 @@ oracle — its `docker-compose.yml` service uses `network_mode: "service:mosquit
 `localhost:1883` resolves correctly from inside its container, and `mosquitto.conf` is configured
 with a matching `admin`/`changeme` user (generated fresh at container start, not committed to the
 repo). Our own service joins the same network namespace for the same reason: the
-`sparkplug-export` profile's default `BrokerAddress` is also `tcp://localhost:1883`.
+`sparkplug-export` profile's default `Sparkplug.MqttBroker.Url` is also `tcp://localhost:1883`.
 
 ## Extending this manually: exercising the NCMD rebirth-on-command path
 

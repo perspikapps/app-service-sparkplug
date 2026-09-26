@@ -9,8 +9,8 @@ import (
 )
 
 // NewExportFunction returns a pipeline AppFunction that converts each EdgeX event's readings into
-// Sparkplug metrics and publishes them through node, which auto-births the event's device on
-// first sighting. Readings whose value type isn't supported for Sparkplug export are skipped
+// Sparkplug metrics, named by Payload.MetricNameFormat, and publishes them through node, which
+// auto-births the event's device on first sighting. Readings whose value type isn't supported for Sparkplug export are skipped
 // individually rather than failing the whole event.
 func NewExportFunction(node *Node) interfaces.AppFunction {
 	return func(ctx interfaces.AppFunctionContext, data interface{}) (bool, interface{}) {
@@ -30,6 +30,8 @@ func NewExportFunction(node *Node) interfaces.AppFunction {
 				ctx.LoggingClient().Warnf("sparkplug export: skipping reading: %v", err)
 				continue
 			}
+			builtins := builtinNameKeys(reading.ResourceName, event.DeviceName, event.ProfileName, event.SourceName)
+			metric.Name = node.metricName(reading.ResourceName, builtins, reading.Tags, event.Tags)
 			metrics = append(metrics, metric)
 		}
 
@@ -37,7 +39,7 @@ func NewExportFunction(node *Node) interfaces.AppFunction {
 			return true, nil
 		}
 
-		if err := node.PublishDeviceData(event.DeviceName, metrics); err != nil {
+		if err := node.PublishDeviceData(event.DeviceName, event.ProfileName, metrics); err != nil {
 			return false, fmt.Errorf("sparkplug export: failed to publish device '%s' data: %w", event.DeviceName, err)
 		}
 

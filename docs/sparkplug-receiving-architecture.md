@@ -9,10 +9,23 @@ the databases that receive this stream: what to write, where, and why, using Inf
 short-retention "hot" data and BigQuery for long-retention "cold" data.
 
 If you haven't read how the producer side works, the short version: one running instance of this
-service is one Sparkplug **Edge Node** (`spBv1.0/{GroupId}/.../{EdgeNodeId}[/{Device}]`); each
-distinct EdgeX device name becomes its own Sparkplug **Device**, auto-birthed on first sighting.
-See `internal/sparkplug/node.go` for the full lifecycle (NBIRTH/NDEATH with `bdSeq` and an MQTT
-Will, per-device DBIRTH/DDATA, sequence numbers, and NCMD `Node Control/Rebirth` handling).
+service is one Sparkplug **Edge Node** (`{Namespace}/{GroupId}/.../{EdgeNodeId}[/{Device}]`, with
+`Namespace` defaulting to `spBv1.0`); each EdgeX device becomes its own Sparkplug **Device**, born
+when it is registered in core-metadata (all profile resources declared with `is_null`) or on its
+first reading, and sent **DDEATH** when it is deleted from core-metadata. See
+`internal/sparkplug/node.go` and `lifecycle.go` for the full lifecycle (NBIRTH/NDEATH with `bdSeq`
+and an MQTT Will, per-device DBIRTH/DDATA/DDEATH, sequence numbers, and NCMD
+`Node Control/Rebirth` handling).
+
+Two producer behaviours the consumer must expect:
+
+- **Metric names are hierarchical paths** built from `Payload.MetricNameFormat` (default
+  `{metric_level1}/{metric_level2}/{resourceName}`, filled from EdgeX resource/device tags; empty
+  levels are dropped, so an untagged resource is just `temperature`). Store the full path as
+  `metric_name`; split on `/` only for display trees.
+- **A DBIRTH may declare metrics with `is_null = true`** (no value yet). Record them in the alias
+  cache, but write no value rows for them. A DDEATH means the device is gone: mark it offline and
+  drop its alias cache entries, since a later DBIRTH may assign new aliases.
 
 ## 2. Consumer responsibilities recap
 
@@ -177,8 +190,7 @@ EdgeX's own core-metadata already holds a good chunk of it: each `Device`'s `Loc
 reads EdgeX's core-metadata REST API and upserts into `dim_metric`/`dim_asset` — fully decoupled
 from the MQTT hot path, so it needs no changes to this producer.
 
-**Future enhancement, not built now** (consistent with the DDEATH-on-removal and DCMD deferrals
-in the producer): Sparkplug's protobuf schema already has a `Metric.properties` field meant for
+**Future enhancement, not built now**: Sparkplug's protobuf schema already has a `Metric.properties` field meant for
 exactly this kind of attached metadata. A later version of this producer could publish
 unit/description/origin directly in each DBIRTH instead of relying on a side-channel sync, letting
 the metadata travel with the birth certificate itself. Worth doing eventually; not required for a

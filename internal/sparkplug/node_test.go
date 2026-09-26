@@ -108,8 +108,8 @@ func testNode(client *fakeClient) *Node {
 		cfg: Config{
 			GroupId:    "TestGroup",
 			EdgeNodeId: "TestNode",
-			QoS:        0,
 		},
+		s:         settings{namespace: defaultNamespace, metricNameFormat: defaultMetricNameFormat},
 		lc:        logger.NewMockClient(),
 		client:    client,
 		nextAlias: firstDeviceAlias,
@@ -155,7 +155,7 @@ func TestPublishDeviceData_AutoBirthsOnFirstSighting(t *testing.T) {
 	n := testNode(client)
 
 	metrics := []Metric{{Name: "temperature", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 21.5}}
-	if err := n.PublishDeviceData("Thermostat1", metrics); err != nil {
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", metrics); err != nil {
 		t.Fatalf("PublishDeviceData() error = %v", err)
 	}
 
@@ -179,10 +179,10 @@ func TestPublishDeviceData_SubsequentPublishIsDataWithoutName(t *testing.T) {
 	n := testNode(client)
 
 	metrics := []Metric{{Name: "temperature", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 21.5}}
-	if err := n.PublishDeviceData("Thermostat1", metrics); err != nil {
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", metrics); err != nil {
 		t.Fatalf("PublishDeviceData() error = %v", err)
 	}
-	if err := n.PublishDeviceData("Thermostat1", metrics); err != nil {
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", metrics); err != nil {
 		t.Fatalf("PublishDeviceData() error = %v", err)
 	}
 
@@ -210,12 +210,12 @@ func TestPublishDeviceData_NewMetricTriggersAnotherBirth(t *testing.T) {
 	client := newFakeClient()
 	n := testNode(client)
 
-	if err := n.PublishDeviceData("Thermostat1", []Metric{
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", []Metric{
 		{Name: "temperature", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 21.5},
 	}); err != nil {
 		t.Fatalf("PublishDeviceData() error = %v", err)
 	}
-	if err := n.PublishDeviceData("Thermostat1", []Metric{
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", []Metric{
 		{Name: "temperature", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 21.5},
 		{Name: "humidity", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 55.0},
 	}); err != nil {
@@ -252,7 +252,7 @@ func TestHandleNCmd_RebirthCommandRepublishesBirths(t *testing.T) {
 	client := newFakeClient()
 	n := testNode(client)
 
-	if err := n.PublishDeviceData("Thermostat1", []Metric{
+	if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", []Metric{
 		{Name: "temperature", Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 21.5},
 	}); err != nil {
 		t.Fatalf("PublishDeviceData() error = %v", err)
@@ -310,7 +310,7 @@ func TestDeathPayload_CarriesBdSeq(t *testing.T) {
 }
 
 func TestNewNode_RequiresGroupEdgeNodeAndBroker(t *testing.T) {
-	_, err := NewNode(Config{AuthMode: "none"}, nil, logger.NewMockClient(), nil)
+	_, err := NewNode(Config{MqttBroker: MqttBrokerConfig{AuthMode: "none"}}, nil, logger.NewMockClient(), nil)
 	if err == nil {
 		t.Fatal("expected error for missing required config fields")
 	}
@@ -318,10 +318,9 @@ func TestNewNode_RequiresGroupEdgeNodeAndBroker(t *testing.T) {
 
 func TestNewNode_RejectsInvalidAuthMode(t *testing.T) {
 	_, err := NewNode(Config{
-		GroupId:       "TestGroup",
-		EdgeNodeId:    "TestNode",
-		BrokerAddress: "tcp://localhost:1883",
-		AuthMode:      "bogus",
+		GroupId:    "TestGroup",
+		EdgeNodeId: "TestNode",
+		MqttBroker: MqttBrokerConfig{Url: "tcp://localhost:1883", AuthMode: "bogus"},
 	}, nil, logger.NewMockClient(), nil)
 	if err == nil {
 		t.Fatal("expected error for invalid AuthMode")
@@ -330,11 +329,9 @@ func TestNewNode_RejectsInvalidAuthMode(t *testing.T) {
 
 func TestNewNode_RejectsOutOfRangeQoS(t *testing.T) {
 	_, err := NewNode(Config{
-		GroupId:       "TestGroup",
-		EdgeNodeId:    "TestNode",
-		BrokerAddress: "tcp://localhost:1883",
-		AuthMode:      "none",
-		QoS:           3,
+		GroupId:    "TestGroup",
+		EdgeNodeId: "TestNode",
+		MqttBroker: MqttBrokerConfig{Url: "tcp://localhost:1883", AuthMode: "none", QoS: 3},
 	}, nil, logger.NewMockClient(), nil)
 	if err == nil {
 		t.Fatal("expected error for out-of-range QoS")
@@ -440,5 +437,23 @@ func TestRegisterCounter_RegistrationErrorReturnsNilCounter(t *testing.T) {
 
 	if got := registerCounter(metrics, counterPublishErrors, logger.NewMockClient()); got != nil {
 		t.Errorf("expected nil counter when registration fails, got %v", got)
+	}
+}
+
+func TestPublishDeviceData_BirthDeclaresEveryKnownMetric(t *testing.T) {
+	client := newFakeClient()
+	n := testNode(client)
+
+	for _, name := range []string{"temperature", "humidity"} {
+		if err := n.PublishDeviceData("Thermostat1", "ThermostatProfile", []Metric{
+			{Name: name, ResourceName: name, Timestamp: time.Now(), DataType: spplugb.DataType_Double, Value: 1.0},
+		}); err != nil {
+			t.Fatalf("PublishDeviceData() error = %v", err)
+		}
+	}
+
+	second := client.published[1]
+	if !strings.Contains(second.topic, "/DBIRTH/") || len(second.payload.GetMetrics()) != 2 {
+		t.Fatalf("expected the second DBIRTH to declare both metrics, got %s with %d", second.topic, len(second.payload.GetMetrics()))
 	}
 }

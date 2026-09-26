@@ -26,23 +26,56 @@ Writable:
 
 # Sparkplug B export is implemented in Go (not YAML) and is appended to the pipeline above by
 # main.go when Enabled is true. One running service instance is one Sparkplug Edge Node; each
-# distinct EdgeX device name seen on the pipeline becomes its own Sparkplug Device.
-SparkplugConfig:
+# EdgeX device becomes its own Sparkplug Device.
+#
+# Keys and nesting follow IOTech Edge Xpert's Sparkplug service, so the same environment overrides
+# work here (SPARKPLUG_GROUPID, SPARKPLUG_MQTTBROKER_URL, ...). Every key is written out, even at its
+# default, as a reference. See docs/edge-xpert-compatibility.md.
+Sparkplug:
   Enabled: true
+  Namespace: "spBv1.0"
   GroupId: "EdgeX"
   EdgeNodeId: "app-sparkplug-export"
-  BrokerAddress: "tcp://localhost:1883"
-  ClientId: "app-sparkplug-export"
-  SecretName: "mqtt"
-  AuthMode: "none"
-  QoS: 0
-  SkipCertVerify: false
-  # BdSeqStatePath, if set to a writable local file path, persists bdSeq across process restarts
-  # (read, increment, write back) so a Primary Host Application can tell a genuine new Edge Node
-  # session apart from a replay. Left empty here: bdSeq starts at 0 on every restart, which is
-  # fine for local development but worth setting on a durable path in production, e.g.:
-  # BdSeqStatePath: "/data/sparkplug-bdseq"
+  # If set to a writable local file path, persists bdSeq across process restarts (read, increment,
+  # write back) so a Primary Host Application can tell a genuine new Edge Node session apart from a
+  # replay. Empty: bdSeq starts at 0 on every restart - set a durable path in production, e.g.
+  # "/data/sparkplug-bdseq".
   BdSeqStatePath: ""
+  MqttBroker:
+    Url: "tcp://localhost:1883"
+    # A random suffix is appended at runtime, e.g. "edgex-sparkplug-1a2b3c4d".
+    ClientIdPrefix: "edgex-sparkplug"
+    ConnectTimeout: "30s"
+    KeepAlive: "60s"
+    QoS: 0
+    # Edge Xpert defaults this to false; true here so a dropped connection reconnects and rebirths
+    # instead of leaving the Edge Node dead until the service restarts.
+    AutoReconnect: true
+    # Sparkplug 3.0 requires BIRTH/DATA/DEATH messages to be non-retained; keep false.
+    Retain: false
+    SkipCertVerify: false
+    # SecretStore secret holding the broker credentials/certificates (see InsecureSecrets below).
+    SecretPath: "mqtt"
+    # One of "none", "usernamepassword", "cacert", "clientcert".
+    AuthMode: "none"
+    # The initial connection is retried every RetryInterval for up to RetryDuration.
+    RetryDuration: "600s"
+    RetryInterval: "5s"
+  Payload:
+    # Metric name template. {key} is filled from the device resource's (reading's) tags, then the
+    # device's (event's) tags, then the built-ins resourceName, deviceName, profileName and
+    # sourceName. Empty path segments are dropped, so an untagged resource is named just
+    # "{resourceName}".
+    MetricNameFormat: "{metric_level1}/{metric_level2}/{resourceName}"
+  DeviceLifecycle:
+    # How often core-metadata is polled: newly added devices get a DBIRTH declaring every resource
+    # of their profile, deleted devices get a DDEATH. "0" disables polling (devices are then born on
+    # their first reading and never sent DDEATH). Needs the core-metadata client from common config.
+    PollInterval: "30s"
+  Commands:
+    # When true, DCMD messages from a Sparkplug host write to writable device resources through
+    # core-command (EdgeX SET commands). Off by default: it lets a SCADA host drive equipment.
+    Enabled: false
 
 InsecureSecrets:
   mqtt:
