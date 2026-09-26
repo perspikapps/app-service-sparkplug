@@ -1,0 +1,12 @@
+# Minimal common config supplied to sparkplug-export via --commonConfig, since this standalone test
+# has no Configuration Provider to normally provide it. Only fills in what this test actually needs
+# and the profile itself doesn't already have (see docker-compose.yml and
+# docs/testing/tahu-compliance-testing.md) - Trigger.Type, which is deliberately absent from
+# res/sparkplug-export/configuration.yaml so real deployments get it from real common config instead.
+#
+# Structure required by go-mod-bootstrap's loadCommonConfigFromFile: top-level all-services (applied
+# to every service type) and app-services (merged on top, for App Services specifically) sections.
+all-services:
+  Trigger:
+    Type: "http"
+app-services: {}

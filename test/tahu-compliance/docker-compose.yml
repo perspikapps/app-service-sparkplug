@@ -1,0 +1,94 @@
+# Sparkplug B compliance test environment: this repo's Sparkplug Edge Node (`sparkplug-export`
+# profile) plus Eclipse Tahu's reference Host Application, both against a local Mosquitto broker.
+# See docs/testing/tahu-compliance-testing.md for how to run and interpret this.
+#
+# Nothing here is exposed on the host: every check the test script performs runs via
+# `docker compose exec`/`docker compose logs`, so this is safe to run in CI without any host
+# port allocation.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    # Overriding the entrypoint below bypasses the image's own root->mosquitto-user privilege
+    # drop, so this runs as root - needed to write the generated passwd file into
+    # /mosquitto/config, which the image ships owned by root, not the mosquitto user. mosquitto
+    # itself still drops privilege to the mosquitto user once started, so the generated file's
+    # ownership/permissions are fixed up to match what it expects before that happens.
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - "mosquitto_passwd -b -c /mosquitto/config/passwd admin changeme && chown mosquitto:mosquitto /mosquitto/config/passwd && chmod 0700 /mosquitto/config/passwd && exec mosquitto -c /mosquitto/config/mosquitto.conf"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 -i healthcheck-probe >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Eclipse Tahu's reference Sparkplug B Host Application: a fixed demo app whose broker address
+  # (tcp://localhost:1883) is hardcoded, so this joins mosquitto's network namespace instead of
+  # using a service-name hostname. See Dockerfile.tahu-host for why.
+  tahu-host-compat:
+    build:
+      context: .
+      dockerfile: Dockerfile.tahu-host
+    network_mode: "service:mosquitto"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - tahu-commands:/tmp/commands
+
+  # This repo's own service, running the sparkplug-export profile. Also joins mosquitto's network
+  # namespace so the profile's default MqttBroker.Url ("tcp://localhost:1883") resolves without
+  # any override, and so the HTTP trigger endpoint used by the test script (see
+  # docs/testing/tahu-compliance-testing.md) is reachable via `docker compose exec` without
+  # publishing any port to the host.
+  sparkplug-export:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    network_mode: "service:mosquitto"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      # Supplies Trigger.Type=http (see common-config.yaml) via EdgeX's own supported mechanism for
+      # this - go-mod-bootstrap's --commonConfig flag - rather than an env var override, since
+      # res/sparkplug-export/configuration.yaml has no Trigger section at all for an env var to
+      # match (that's deliberate: real deployments get Trigger.Type from real common config, and
+      # this test must not change that by adding it to the checked-in profile).
+      - ./common-config.yaml:/common-config.yaml:ro
+    environment:
+      # No Vault/SecretStore running here either (AuthMode is "none" for MQTT, no real secrets
+      # needed) - without this, the SDK's bootstrap retries reading a token file for 60s and then
+      # fails startup entirely, so the Sparkplug Node's NBIRTH never happens.
+      EDGEX_SECURITY_SECRET_STORE: "false"
+      # Exercises the bdSeq-persistence fix (internal/sparkplug/node.go's nextBdSeq) across the
+      # test script's mid-run restart: this path survives a `docker compose restart` (same
+      # container, same filesystem) even though it wouldn't survive a full recreate.
+      SPARKPLUG_BDSEQSTATEPATH: /tmp/sparkplug-bdseq
+      # No core-metadata runs here, so there is nothing to poll for device registration/removal;
+      # devices are born from their first reading instead (which is what the script exercises).
+      SPARKPLUG_DEVICELIFECYCLE_POLLINTERVAL: "0"
+      # The profile's own configuration.yaml doesn't fill in MessageBus.Host/Port/Protocol/Type -
+      # in a full EdgeX deployment those come from common config via a Configuration Provider,
+      # which this standalone test deliberately has neither of. The SDK's internal MessageBus
+      # client is bootstrapped unconditionally (independent of TRIGGER_TYPE), so without this it
+      # fails bootstrap outright ("MessageBus configuration is incomplete"). This test has no use
+      # for the internal EdgeX MessageBus at all (HTTP trigger, Sparkplug's own MQTT client is
+      # separate), so disable it outright rather than fill in unused broker fields.
+      MESSAGEBUS_DISABLED: "true"
+    # Replaces the base image's default CMD (-cp=keeper.http://edgex-core-keeper:59890 --registry),
+    # which an empty `command: []` was proven NOT to reliably clear. res/sparkplug-export/
+    # configuration.yaml is already provisioned into the image (Dockerfile's `COPY .../res/ /res/`),
+    # so selecting the profile is the only flag this standalone test needs - no Configuration
+    # Provider/registry flags are passed at all, so the SDK loads that file directly.
+    # --skipVersionCheck: the SDK's VersionValidator otherwise looks up a "core-metadata" entry
+    # under Clients (normally supplied by common config) just to compare version numbers - nothing
+    # this test needs, since there's no real core-metadata running here at all.
+    # --commonConfig: see common-config.yaml and the volume mount above.
+    command: ["--profile=sparkplug-export", "--skipVersionCheck", "--commonConfig=/common-config.yaml"]
+
+volumes:
+  tahu-commands:

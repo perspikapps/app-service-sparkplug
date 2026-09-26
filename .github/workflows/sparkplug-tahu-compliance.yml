@@ -1,0 +1,39 @@
+name: Sparkplug Tahu Compliance Test
+
+# Validates the Sparkplug B Edge Node (internal/sparkplug/) against Eclipse Tahu's reference,
+# spec-compliant Host Application. See docs/testing/tahu-compliance-testing.md.
+#
+# Kept separate from any unit-test workflow: this one builds a full Maven project (the reference
+# Host Application) and brings up a multi-container Docker Compose stack, so it's slower and needs
+# Docker/network access that plain `go test` doesn't.
+on:
+  pull_request:
+    paths:
+      - "internal/sparkplug/**"
+      - "test/tahu-compliance/**"
+      - ".github/workflows/sparkplug-tahu-compliance.yml"
+  workflow_dispatch: {}
+
+jobs:
+  compliance-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The Maven build of the reference Host Application runs inside an isolated Docker build
+      # stage (Dockerfile.tahu-host), not directly on the runner, so a plain actions/cache on
+      # ~/.m2 wouldn't be seen by it. Docker's own layer cache already avoids re-cloning/rebuilding
+      # unchanged layers within a single job; cross-run caching (e.g. a BuildKit cache mount plus
+      # `--cache-to type=gha`) is a reasonable future optimization if build time becomes a
+      # problem, not required for correctness now.
+      - name: Run compliance test
+        run: make compliance-test
+
+      - name: Upload container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tahu-compliance-logs
+          path: test/tahu-compliance/compliance-test.log
+          if-no-files-found: ignore

@@ -1,0 +1,17 @@
+[
+  {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Metric timestamp, from the Sparkplug payload/metric timestamp (ms since epoch)."},
+  {"name": "group_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Group ID."},
+  {"name": "edge_node_id", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug Edge Node ID."},
+  {"name": "device_id", "type": "STRING", "mode": "NULLABLE", "description": "Sparkplug Device ID. Null for node-level metrics (e.g. bdSeq, Node Control/Rebirth)."},
+  {"name": "metric_name", "type": "STRING", "mode": "REQUIRED", "description": "Metric name, resolved from the BIRTH-message alias table if the source message only carried an alias."},
+  {"name": "alias", "type": "INT64", "mode": "NULLABLE", "description": "Sparkplug metric alias, if present on the source message."},
+  {"name": "data_type", "type": "STRING", "mode": "REQUIRED", "description": "Sparkplug DataType name (e.g. 'Double', 'Boolean', 'Int32')."},
+  {"name": "value_double", "type": "FLOAT64", "mode": "NULLABLE", "description": "Populated for Float/Double metrics."},
+  {"name": "value_int64", "type": "INT64", "mode": "NULLABLE", "description": "Populated for Int8/16/32/64 and UInt8/16/32/64 metrics."},
+  {"name": "value_bool", "type": "BOOL", "mode": "NULLABLE", "description": "Populated for Boolean metrics."},
+  {"name": "value_string", "type": "STRING", "mode": "NULLABLE", "description": "Populated for String metrics."},
+  {"name": "value_bytes", "type": "BYTES", "mode": "NULLABLE", "description": "Populated for Bytes/DataSet metrics."},
+  {"name": "seq", "type": "INT64", "mode": "NULLABLE", "description": "Sparkplug node-level sequence number (0-255) carried on this message's payload."},
+  {"name": "bd_seq", "type": "INT64", "mode": "NULLABLE", "description": "The Edge Node's birth/death sequence number in effect when this message was published, identifying its MQTT session."},
+  {"name": "ingestion_time", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the consumer wrote this row, for lag/freshness monitoring."}
+]

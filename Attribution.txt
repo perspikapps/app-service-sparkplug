@@ -425,3 +425,15 @@ https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/main/LIC
 
 go.yaml.in/yaml/v3 (Apache 2.0) https://github.com/yaml/go-yaml/tree/v3/
 https://github.com/yaml/go-yaml/blob/v3/LICENSE
+
+github.com/stretchr/testify (MIT) https://github.com/stretchr/testify
+https://github.com/stretchr/testify/blob/master/LICENSE
+
+github.com/stretchr/objx (MIT) https://github.com/stretchr/objx
+https://github.com/stretchr/objx/blob/master/LICENSE
+
+github.com/davecgh/go-spew (ISC License) https://github.com/davecgh/go-spew
+https://github.com/davecgh/go-spew/blob/master/LICENSE
+
+github.com/pmezard/go-difflib (BSD-3) https://github.com/pmezard/go-difflib
+https://github.com/pmezard/go-difflib/blob/master/LICENSE

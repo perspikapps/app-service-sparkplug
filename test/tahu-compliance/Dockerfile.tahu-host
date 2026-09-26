@@ -1,0 +1,28 @@
+# Builds Eclipse Tahu's reference Sparkplug B Host Application (tahu-host-compat), used as an
+# independent, spec-authoritative validator of this repo's Sparkplug Edge Node implementation.
+# See docs/testing/tahu-compliance-testing.md.
+#
+# tahu-host-compat is a fixed demo app: its broker URL (tcp://localhost:1883) and credentials
+# (admin/changeme) are hardcoded Java constants, not externally configurable. Rather than patch
+# the reference implementation (which would undermine using it as an independent oracle), the
+# docker-compose service running this image joins the mosquitto service's network namespace
+# (network_mode: "service:mosquitto") so "localhost:1883" resolves correctly, and mosquitto.conf
+# is configured with a matching admin/changeme user.
+#
+# Pinned to the eclipse-tahu/tahu v1.0.7 tag for reproducibility.
+ARG TAHU_REF=v1.0.7
+
+FROM maven:3.9-eclipse-temurin-17 AS builder
+ARG TAHU_REF
+WORKDIR /build
+RUN git clone --depth 1 --branch ${TAHU_REF} https://github.com/eclipse-tahu/tahu.git .
+WORKDIR /build/java
+RUN mvn -B -DskipTests clean install
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=builder /build/java/compat_impl/host/target/tahu-host-compat-*.jar /app/tahu-host-compat.jar
+# tahu-host-compat polls this directory for JSON command files to publish (e.g. a Node Control/
+# Rebirth command) - see docs/testing/tahu-compliance-testing.md for how the test script uses it.
+RUN mkdir -p /tmp/commands
+ENTRYPOINT ["java", "-jar", "/app/tahu-host-compat.jar"]

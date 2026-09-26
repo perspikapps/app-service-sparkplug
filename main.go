@@ -21,6 +21,9 @@ import (
 
 	"github.com/edgexfoundry/app-functions-sdk-go/v4/pkg"
 	"github.com/edgexfoundry/app-functions-sdk-go/v4/pkg/interfaces"
+	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/environment"
+
+	"github.com/edgexfoundry/app-service-configurable/internal/sparkplug"
 )
 
 const (
@@ -45,15 +48,56 @@ func main() {
 
 	lc.Debugf("Found %d configured pipeline(s)", len(configuredPipelines))
 
+	var sparkplugConfig sparkplug.ServiceConfig
+	if err = service.LoadCustomConfig(&sparkplugConfig, "Sparkplug"); err != nil {
+		lc.Errorf("failed to load Sparkplug configuration: %s", err.Error())
+		os.Exit(-1)
+	}
+	// Without a Configuration Provider the SDK loads custom sections straight from the file with no
+	// environment overrides, so apply them here: SPARKPLUG_* variables then work in every mode.
+	// With a provider they were already applied when the section was first pushed,
+	// so this is a no-op unless the stored value has since been changed.
+	overrides, err := environment.NewVariables(lc).OverrideConfiguration(&sparkplugConfig)
+	if err != nil {
+		lc.Errorf("failed to apply Sparkplug environment overrides: %s", err.Error())
+		os.Exit(-1)
+	}
+	lc.Debugf("Applied %d environment override(s) to the Sparkplug configuration", overrides)
+
+	var sparkplugFn interfaces.AppFunction
+	if cfg := sparkplugConfig.Sparkplug; cfg.Enabled {
+		node, err := sparkplug.NewNode(cfg, service.SecretProvider(), lc, service.MetricsManager())
+		if err != nil {
+			lc.Errorf("failed to create Sparkplug node: %s", err.Error())
+			os.Exit(-1)
+		}
+		if cfg.Commands.Enabled {
+			node.EnableCommands(service.CommandClient(), service.DeviceProfileClient())
+		}
+		if err = node.Start(service.AppContext()); err != nil {
+			lc.Errorf("failed to start Sparkplug node: %s", err.Error())
+			os.Exit(-1)
+		}
+		node.RunDeviceLifecycle(service.AppContext(), service.DeviceClient(), service.DeviceProfileClient())
+
+		sparkplugFn = sparkplug.NewExportFunction(node)
+		lc.Infof("Sparkplug B export enabled for group '%s' edge node '%s'", cfg.GroupId, cfg.EdgeNodeId)
+	}
+
 	for _, pipeline := range configuredPipelines {
+		transforms := pipeline.Transforms
+		if sparkplugFn != nil {
+			transforms = append(transforms, sparkplugFn)
+		}
+
 		switch pipeline.Id {
 		case interfaces.DefaultPipelineId:
-			if err = service.SetDefaultFunctionsPipeline(pipeline.Transforms...); err != nil {
-				lc.Errorf("Unable to Set Default Functions Pipeline: %s", pipeline.Id, err.Error())
+			if err = service.SetDefaultFunctionsPipeline(transforms...); err != nil {
+				lc.Errorf("Unable to Set Default Functions Pipeline: %s", err.Error())
 				os.Exit(-1)
 			}
 		default:
-			if err = service.AddFunctionsPipelineForTopics(pipeline.Id, pipeline.Topics, pipeline.Transforms...); err != nil {
+			if err = service.AddFunctionsPipelineForTopics(pipeline.Id, pipeline.Topics, transforms...); err != nil {
 				lc.Errorf("Unable to Add Functions Pipeline for pipeline id '%s': %s", pipeline.Id, err.Error())
 				os.Exit(-1)
 			}
