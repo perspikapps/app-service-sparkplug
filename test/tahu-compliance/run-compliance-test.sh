@@ -36,11 +36,16 @@ log_line_count() {
 
 # wait_for_log polls $1's logs (only lines after line number $4, default 0) for $2, up to $3
 # seconds.
+#
+# Logs are captured into a variable before grepping: piping straight into `grep -q` under
+# `set -o pipefail` lets grep exit on the first match, killing the upstream command with SIGPIPE and
+# making the whole pipeline report failure exactly when the pattern *was* found.
 wait_for_log() {
   local service="$1" pattern="$2" timeout="$3" since_line="${4:-0}"
-  local waited=0
+  local waited=0 out
   while ((waited < timeout)); do
-    if $COMPOSE logs "$service" 2>/dev/null | tail -n "+$((since_line + 1))" | grep -q "$pattern"; then
+    out="$($COMPOSE logs "$service" 2>/dev/null | tail -n "+$((since_line + 1))" || true)"
+    if grep -q "$pattern" <<<"$out"; then
       return 0
     fi
     sleep 2
@@ -50,7 +55,9 @@ wait_for_log() {
 }
 
 fail_if_rebirth_requested() {
-  if $COMPOSE logs tahu-host-compat 2>/dev/null | grep -qi "equesting a rebirth"; then
+  local out
+  out="$($COMPOSE logs tahu-host-compat 2>/dev/null || true)"
+  if grep -qi "equesting a rebirth" <<<"$out"; then
     echo "FAIL: tahu-host-compat requested a rebirth - our Edge Node's BIRTH/DATA was not accepted as spec-compliant."
     exit 1
   fi
