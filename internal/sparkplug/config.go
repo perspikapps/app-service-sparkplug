@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Defaults mirror IOTech Edge Xpert's Sparkplug service where it defines one, so a configuration
-// written for Edge Xpert behaves the same here. See docs/edge-xpert-compatibility.md.
+// Configuration defaults. See docs/sparkplug-export.md.
 const (
 	defaultNamespace        = "spBv1.0"
 	defaultClientIdPrefix   = "edgex-sparkplug"
@@ -20,9 +19,8 @@ const (
 )
 
 // Config holds the settings for this service's single Sparkplug B Edge Node, loaded from the
-// "Sparkplug" custom configuration section. Key names and nesting follow Edge Xpert's Sparkplug
-// service, so its environment overrides (SPARKPLUG_GROUPID, SPARKPLUG_MQTTBROKER_URL, ...) apply
-// unchanged.
+// "Sparkplug" custom configuration section. Every key can be overridden by an environment variable
+// named after its path (SPARKPLUG_GROUPID, SPARKPLUG_MQTTBROKER_URL, ...).
 type Config struct {
 	// Enabled turns the Sparkplug B export on or off; when false, no Node is created and the
 	// pipeline behaves exactly as configured in YAML.
@@ -44,7 +42,7 @@ type Config struct {
 }
 
 // MqttBrokerConfig configures the connection to the Sparkplug MQTT broker. Durations use Go
-// duration syntax ("30s"); empty values fall back to Edge Xpert's defaults.
+// duration syntax ("30s"); empty values fall back to the defaults above.
 type MqttBrokerConfig struct {
 	// Url is the complete broker address, e.g. "tcp://localhost:1883" or "tcps://host:8883".
 	Url string
@@ -56,7 +54,7 @@ type MqttBrokerConfig struct {
 	QoS            int
 	AutoReconnect  bool
 	// Retain sets the MQTT retained flag on published messages. Sparkplug 3.0 requires BIRTH, DATA
-	// and DEATH messages to be non-retained; this exists only for parity with Edge Xpert.
+	// and DEATH messages to be non-retained, so leave it false.
 	Retain         bool
 	SkipCertVerify bool
 	// SecretPath is the SecretStore secret holding broker credentials/certs.

@@ -121,7 +121,7 @@ func (d *device) metric(name string, alias *uint64) (Metric, bool) {
 // rebirth and (opt-in) DCMD commands, and the set of EdgeX devices it knows about. One Node
 // corresponds to one running instance of this service.
 //
-// Primary Host Application STATE monitoring is not implemented; see docs/edge-xpert-compatibility.md.
+// Primary Host Application STATE monitoring is not implemented; see docs/sparkplug-export.md.
 type Node struct {
 	cfg    Config
 	s      settings
@@ -200,7 +200,7 @@ func NewNode(cfg Config, sp bootstrapInterfaces.SecretProvider, lc logger.Loggin
 	return n, nil
 }
 
-// clientID appends a random suffix to prefix, as Edge Xpert does, so a restarted process never
+// clientID appends a random suffix to prefix so a restarted process never
 // collides with a broker session the previous one still holds.
 func clientID(prefix string) string {
 	suffix := make([]byte, 4)

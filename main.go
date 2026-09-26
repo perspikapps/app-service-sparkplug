@@ -54,8 +54,8 @@ func main() {
 		os.Exit(-1)
 	}
 	// Without a Configuration Provider the SDK loads custom sections straight from the file with no
-	// environment overrides, so apply them here: SPARKPLUG_* variables then work in every mode, as
-	// in Edge Xpert. With a provider they were already applied when the section was first pushed,
+	// environment overrides, so apply them here: SPARKPLUG_* variables then work in every mode.
+	// With a provider they were already applied when the section was first pushed,
 	// so this is a no-op unless the stored value has since been changed.
 	overrides, err := environment.NewVariables(lc).OverrideConfiguration(&sparkplugConfig)
 	if err != nil {

@@ -14,7 +14,7 @@ func validConfig() Config {
 	}
 }
 
-func TestResolve_AppliesEdgeXpertDefaults(t *testing.T) {
+func TestResolve_AppliesDefaults(t *testing.T) {
 	s, err := validConfig().resolve()
 	if err != nil {
 		t.Fatalf("resolve() error = %v", err)

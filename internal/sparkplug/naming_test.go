@@ -10,9 +10,9 @@ func TestMetricName(t *testing.T) {
 		sources []map[string]any
 		want    string
 	}{
-		{"edge xpert default with levels", defaultMetricNameFormat,
+		{"default format with levels", defaultMetricNameFormat,
 			[]map[string]any{{"metric_level1": "Building4", "metric_level2": "Zone2"}, builtins}, "Building4/Zone2/temperature"},
-		{"edge xpert default without tags collapses", defaultMetricNameFormat,
+		{"default format without tags collapses", defaultMetricNameFormat,
 			[]map[string]any{builtins}, "temperature"},
 		{"partial levels collapse", defaultMetricNameFormat,
 			[]map[string]any{{"metric_level2": "Zone2"}, builtins}, "Zone2/temperature"},

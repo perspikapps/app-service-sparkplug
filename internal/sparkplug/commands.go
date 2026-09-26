@@ -92,7 +92,7 @@ func (n *Node) handleDCmd(_ mqtt.Client, msg mqtt.Message) {
 			n.lc.Errorf("sparkplug: failed to issue SET command '%s' on device '%s': %v", w.resourceName, deviceName, err)
 			continue
 		}
-		n.lc.Infof("sparkplug: successfully issue SET command '%s' on device '%s' with value '%s'", w.resourceName, deviceName, w.value)
+		n.lc.Infof("sparkplug: successfully issued SET command '%s' on device '%s' with value '%s'", w.resourceName, deviceName, w.value)
 	}
 }
 

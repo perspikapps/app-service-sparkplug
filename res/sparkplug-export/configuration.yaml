@@ -28,9 +28,9 @@ Writable:
 # main.go when Enabled is true. One running service instance is one Sparkplug Edge Node; each
 # EdgeX device becomes its own Sparkplug Device.
 #
-# Keys and nesting follow IOTech Edge Xpert's Sparkplug service, so the same environment overrides
-# work here (SPARKPLUG_GROUPID, SPARKPLUG_MQTTBROKER_URL, ...). Every key is written out, even at its
-# default, as a reference. See docs/edge-xpert-compatibility.md.
+# Every key can be overridden by an environment variable named after its path (SPARKPLUG_GROUPID,
+# SPARKPLUG_MQTTBROKER_URL, ...). Every key is written out, even at its default, as a reference.
+# See docs/sparkplug-export.md.
 Sparkplug:
   Enabled: true
   Namespace: "spBv1.0"
@@ -48,7 +48,7 @@ Sparkplug:
     ConnectTimeout: "30s"
     KeepAlive: "60s"
     QoS: 0
-    # Edge Xpert defaults this to false; true here so a dropped connection reconnects and rebirths
+    # true so a dropped connection reconnects and rebirths
     # instead of leaving the Edge Node dead until the service restarts.
     AutoReconnect: true
     # Sparkplug 3.0 requires BIRTH/DATA/DEATH messages to be non-retained; keep false.

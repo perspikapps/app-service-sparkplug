@@ -10,9 +10,9 @@ var placeholderPattern = regexp.MustCompile(`\{([^{}]+)\}`)
 
 // MetricName builds a Sparkplug metric name from format (Payload.MetricNameFormat), replacing each
 // {key} placeholder with the value of key in the first source that has it. A placeholder no source
-// resolves becomes empty, and empty '/'-separated segments are then dropped, so Edge Xpert's
-// default "{metric_level1}/{metric_level2}/{resourceName}" yields just the resource name for a
-// resource without metric_level tags instead of a name like "//temperature".
+// resolves becomes empty, and empty '/'-separated segments are then dropped, so the default
+// "{metric_level1}/{metric_level2}/{resourceName}" yields just the resource name for a resource
+// without metric_level tags instead of a name like "//temperature".
 func MetricName(format string, sources ...map[string]any) string {
 	name := placeholderPattern.ReplaceAllStringFunc(format, func(placeholder string) string {
 		key := placeholder[1 : len(placeholder)-1]
